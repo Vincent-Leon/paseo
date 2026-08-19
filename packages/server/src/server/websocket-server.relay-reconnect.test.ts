@@ -87,14 +87,16 @@ vi.mock("./session.js", () => ({
 }));
 
 vi.mock("./push/index.js", () => ({
-  createPushNotifications: () => ({
+  createPushNotifications: (): PushNotifications => ({
     renew: () => undefined,
     revoke: () => undefined,
     send: async () => undefined,
+    listDeliverableProviders: () => [],
   }),
 }));
 
 import { z } from "zod";
+import type { PushNotifications } from "./push/index.js";
 import { VoiceAssistantWebSocketServer } from "./websocket-server";
 import { parseServerInfoStatusPayload } from "./messages.js";
 import type { SpeechReadinessSnapshot } from "./speech/speech-runtime.js";

@@ -2710,12 +2710,18 @@ export const ListCommandsRequestSchema = z.object({
 export const RegisterPushTokenMessageSchema = z.object({
   type: z.literal("register_push_token"),
   token: z.string(),
+  // COMPAT(pushProviders): added in v0.4.1, remove optional after 2027-02-01 once
+  // no client can still register a token without naming its delivery channel.
+  // Absent means Expo, which is the only channel that existed before this field.
+  provider: z.string().min(1).optional(),
 });
 
 export const PushUnregisterRequestSchema = z.object({
   type: z.literal("push.unregister.request"),
   token: z.string(),
   requestId: z.string(),
+  // COMPAT(pushProviders): added in v0.4.1, remove optional after 2027-02-01.
+  provider: z.string().min(1).optional(),
 });
 
 export const PushUnregisterResponseSchema = z.object({
@@ -3318,6 +3324,11 @@ export const ServerInfoStatusPayloadSchema = z
         relayConfig: z.boolean().optional(),
         // COMPAT(pushTokenRevocation): added in v0.3.2, remove gate after 2027-02-10.
         pushTokenRevocation: z.boolean().optional(),
+        // Push channels this host can deliver through, e.g. ["expo"]. A client
+        // registers a token only for a provider listed here. Absent means the
+        // host predates pluggable providers and only speaks Expo.
+        // COMPAT(pushProviders): added in v0.4.1, remove gate after 2027-02-01.
+        pushProviders: z.array(z.string()).optional(),
         // COMPAT(plugins): added in v0.3.0, remove gate after 2027-08-07.
         plugins: z.boolean().optional(),
         // COMPAT(pluginManagement): added in v0.4.0, remove gate after 2027-08-14.

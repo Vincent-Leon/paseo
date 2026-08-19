@@ -175,7 +175,7 @@ import type { HubRelationshipManagement } from "./hub/relationship-controller.js
 import { HubExecutionController } from "./hub/execution-controller.js";
 import type { HubExecutionAgents } from "./hub/daemon-executions.js";
 import { DownloadTokenStore } from "./file-download/token-store.js";
-import type { PushNotifications } from "./push/index.js";
+import { DEFAULT_PUSH_PROVIDER, type PushNotifications } from "./push/index.js";
 import {
   archivePersistedWorkspaceRecord,
   archiveWorkspaceContents,
@@ -709,7 +709,7 @@ export class Session {
     appVisible: boolean;
     appVisibilityChangedAt: Date;
   } | null = null;
-  private registeredPushToken: string | null = null;
+  private registeredPushToken: { provider: string; token: string } | null = null;
   private readonly terminalManager: TerminalManager | null;
   private readonly providerSnapshotManager: ProviderSnapshotManager;
   private readonly serviceProxy: ServiceProxySubsystem | null;
@@ -2564,12 +2564,20 @@ export class Session {
         await this.handleListCommandsRequest(msg);
         return;
       case "register_push_token":
-        this.handleRegisterPushToken(msg.token);
+        this.handleRegisterPushToken(msg.token, msg.provider);
         return;
       case "push.unregister.request":
-        this.pushNotifications.revoke(msg.token);
-        if (this.registeredPushToken?.trim() === msg.token.trim()) {
-          this.registeredPushToken = null;
+        {
+          // COMPAT(pushProviders): a client from before the field only ever had
+          // Expo tokens, so an absent provider means Expo.
+          const provider = msg.provider ?? DEFAULT_PUSH_PROVIDER;
+          this.pushNotifications.revoke(msg.token, provider);
+          if (
+            this.registeredPushToken?.token.trim() === msg.token.trim() &&
+            this.registeredPushToken.provider === provider
+          ) {
+            this.registeredPushToken = null;
+          }
         }
         this.emit({
           type: "push.unregister.response",
@@ -4022,7 +4030,10 @@ export class Session {
       void this.clearFocusedTerminalAttention(focusedTerminalId);
     }
     if (this.registeredPushToken) {
-      this.pushNotifications.renew(this.registeredPushToken);
+      this.pushNotifications.renew(
+        this.registeredPushToken.token,
+        this.registeredPushToken.provider,
+      );
     }
   }
 
@@ -4041,10 +4052,12 @@ export class Session {
   /**
    * Handle push token registration
    */
-  private handleRegisterPushToken(token: string): void {
-    this.registeredPushToken = token;
-    this.pushNotifications.renew(token);
-    this.sessionLogger.info("Registered push token");
+  private handleRegisterPushToken(token: string, provider?: string): void {
+    // COMPAT(pushProviders): absent provider means Expo — see the schema.
+    const resolved = provider ?? DEFAULT_PUSH_PROVIDER;
+    this.registeredPushToken = { provider: resolved, token };
+    this.pushNotifications.renew(token, resolved);
+    this.sessionLogger.info({ provider: resolved }, "Registered push token");
   }
 
   /**

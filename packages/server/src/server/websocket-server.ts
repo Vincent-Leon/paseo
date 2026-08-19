@@ -1672,6 +1672,10 @@ export class VoiceAssistantWebSocketServer {
         ...(this.advertiseRelayConfig ? { relayConfig: true } : {}),
         // COMPAT(pushTokenRevocation): added in v0.3.2, remove gate after 2027-02-10.
         pushTokenRevocation: true,
+        // Channels this host can actually deliver through. A client registers a
+        // token only for a provider named here, so it never hands over a token
+        // nobody can route.
+        pushProviders: this.pushNotifications.listDeliverableProviders(),
         // COMPAT(plugins): added in v0.3.0, remove gate after 2027-08-07.
         plugins: true,
         pluginManagement: true,

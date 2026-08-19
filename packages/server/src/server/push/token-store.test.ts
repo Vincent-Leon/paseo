@@ -82,11 +82,11 @@ describe("PushTokenStore persistence", () => {
       },
     );
 
-    store.renewToken("ExponentPushToken[test]");
+    store.renewToken("expo", "ExponentPushToken[test]");
     rejectWrites = true;
 
-    expect(() => store.revokeToken("ExponentPushToken[test]")).toThrow("disk full");
-    expect(store.getActiveTokens()).toEqual(["ExponentPushToken[test]"]);
+    expect(() => store.revokeToken("expo", "ExponentPushToken[test]")).toThrow("disk full");
+    expect(store.getActiveTokensByProvider().get("expo")).toEqual(["ExponentPushToken[test]"]);
     expect(JSON.parse(persisted)).toEqual({
       subscriptions: [
         {
@@ -97,8 +97,88 @@ describe("PushTokenStore persistence", () => {
     });
 
     rejectWrites = false;
-    store.revokeToken("ExponentPushToken[test]");
-    expect(store.getActiveTokens()).toEqual([]);
+    store.revokeToken("expo", "ExponentPushToken[test]");
+    expect(store.getActiveTokensByProvider().size).toBe(0);
     expect(JSON.parse(persisted)).toEqual({ subscriptions: [] });
+  });
+});
+
+describe("PushTokenStore providers", () => {
+  function makeStore(onPersist: (payload: string) => void, filePath?: string) {
+    return new PushTokenStore(
+      createLogger(),
+      filePath ?? path.join(tmpdir(), `push-provider-store-${process.pid}`, "push-tokens.json"),
+      () => Date.parse("2026-08-10T00:00:00.000Z"),
+      48 * 60 * 60 * 1000,
+      (_filePath, payload) => onPersist(String(payload)),
+    );
+  }
+
+  test("keeps providers in separate buckets", () => {
+    let persisted = "";
+    const store = makeStore((payload) => {
+      persisted = payload;
+    });
+
+    store.renewToken("expo", "ExponentPushToken[a]");
+    store.renewToken("huawei", "hms-token-b");
+
+    const active = store.getActiveTokensByProvider();
+    expect(active.get("expo")).toEqual(["ExponentPushToken[a]"]);
+    expect(active.get("huawei")).toEqual(["hms-token-b"]);
+
+    // The layout is the compatibility contract: an older daemon reads only
+    // `subscriptions`, so it must contain Expo tokens and nothing else.
+    const parsed = JSON.parse(persisted) as {
+      subscriptions: { token: string }[];
+      providers: Record<string, { token: string }[]>;
+    };
+    expect(parsed.subscriptions.map((entry) => entry.token)).toEqual(["ExponentPushToken[a]"]);
+    expect(parsed.providers.huawei.map((entry) => entry.token)).toEqual(["hms-token-b"]);
+    expect(parsed.providers.expo).toBeUndefined();
+  });
+
+  test("revoking one provider leaves the other intact", () => {
+    const store = makeStore(() => undefined);
+    store.renewToken("expo", "ExponentPushToken[a]");
+    store.renewToken("huawei", "hms-token-b");
+
+    store.revokeToken("huawei", "hms-token-b");
+
+    const active = store.getActiveTokensByProvider();
+    expect(active.get("expo")).toEqual(["ExponentPushToken[a]"]);
+    expect(active.has("huawei")).toBe(false);
+  });
+
+  test("reads a pre-provider file as Expo and round-trips a provider file", () => {
+    const home = mkdtempSync(path.join(tmpdir(), "paseo-push-providers-"));
+    const tokenPath = path.join(home, "push-tokens.json");
+    try {
+      // Written by a daemon that predates provider ids.
+      writeFileSync(
+        tokenPath,
+        JSON.stringify({
+          subscriptions: [
+            { token: "ExponentPushToken[legacy]", expiresAt: "2026-08-12T00:00:00.000Z" },
+          ],
+        }),
+      );
+
+      let persisted = "";
+      const store = makeStore((payload) => {
+        persisted = payload;
+      }, tokenPath);
+      expect(store.getActiveTokensByProvider().get("expo")).toEqual(["ExponentPushToken[legacy]"]);
+
+      store.renewToken("huawei", "hms-token-c");
+      writeFileSync(tokenPath, persisted);
+
+      const reloaded = makeStore(() => undefined, tokenPath);
+      const active = reloaded.getActiveTokensByProvider();
+      expect(active.get("expo")).toEqual(["ExponentPushToken[legacy]"]);
+      expect(active.get("huawei")).toEqual(["hms-token-c"]);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 });
