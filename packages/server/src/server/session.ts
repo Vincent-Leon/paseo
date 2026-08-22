@@ -2564,7 +2564,7 @@ export class Session {
         await this.handleListCommandsRequest(msg);
         return;
       case "register_push_token":
-        this.handleRegisterPushToken(msg.token, msg.provider);
+        this.handleRegisterPushToken(msg.token, msg.provider, msg.metadata);
         return;
       case "push.unregister.request":
         {
@@ -4052,11 +4052,15 @@ export class Session {
   /**
    * Handle push token registration
    */
-  private handleRegisterPushToken(token: string, provider?: string): void {
+  private handleRegisterPushToken(
+    token: string,
+    provider?: string,
+    metadata?: Record<string, string>,
+  ): void {
     // COMPAT(pushProviders): absent provider means Expo — see the schema.
     const resolved = provider ?? DEFAULT_PUSH_PROVIDER;
     this.registeredPushToken = { provider: resolved, token };
-    this.pushNotifications.renew(token, resolved);
+    this.pushNotifications.renew(token, resolved, metadata);
     this.sessionLogger.info({ provider: resolved }, "Registered push token");
   }
 

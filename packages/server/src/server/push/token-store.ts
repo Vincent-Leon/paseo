@@ -2,7 +2,14 @@ import type pino from "pino";
 import { existsSync, readFileSync } from "node:fs";
 
 import { ensurePrivateFile, writePrivateFileAtomicSync } from "../private-files.js";
+import type { PushSubscription } from "./push-provider.js";
 import { EXPO_PROVIDER_ID } from "./providers/expo/provider.js";
+
+interface StoredSubscription {
+  expiresAt: number;
+  /** Provider-defined; opaque here. Absent for providers that need none. */
+  metadata?: Record<string, string>;
+}
 
 /**
  * Store for push tokens, keyed by provider.
@@ -23,8 +30,8 @@ import { EXPO_PROVIDER_ID } from "./providers/expo/provider.js";
  */
 export class PushTokenStore {
   private readonly logger: pino.Logger;
-  /** provider id -> token -> expiry (epoch ms). */
-  private subscriptions = new Map<string, Map<string, number>>();
+  /** provider id -> token -> stored subscription. */
+  private subscriptions = new Map<string, Map<string, StoredSubscription>>();
   private readonly filePath: string;
   private readonly now: () => number;
   private readonly leaseMs: number;
@@ -45,15 +52,32 @@ export class PushTokenStore {
     this.loadFromDisk();
   }
 
-  renewToken(provider: string, token: string): void {
+  /**
+   * Registers or extends a lease.
+   *
+   * `metadata` is supplied at registration; a heartbeat renewal omits it and
+   * must not erase what is already stored.
+   */
+  renewToken(provider: string, token: string, metadata?: Record<string, string>): void {
     const normalized = token.trim();
     if (!normalized || !provider) return;
     const now = this.now();
-    const currentExpiry = this.subscriptions.get(provider)?.get(normalized);
-    if (currentExpiry !== undefined && currentExpiry - now > this.leaseMs / 2) return;
+    const existing = this.subscriptions.get(provider)?.get(normalized);
+    const metadataUnchanged = metadata === undefined || sameMetadata(existing?.metadata, metadata);
+    if (
+      existing !== undefined &&
+      metadataUnchanged &&
+      existing.expiresAt - now > this.leaseMs / 2
+    ) {
+      return;
+    }
     const next = this.clone();
-    const forProvider = next.get(provider) ?? new Map<string, number>();
-    forProvider.set(normalized, now + this.leaseMs);
+    const forProvider = next.get(provider) ?? new Map<string, StoredSubscription>();
+    const nextMetadata = metadata ?? existing?.metadata;
+    forProvider.set(normalized, {
+      expiresAt: now + this.leaseMs,
+      ...(nextMetadata ? { metadata: nextMetadata } : {}),
+    });
     next.set(provider, forProvider);
     this.persist(next);
     this.subscriptions = next;
@@ -73,16 +97,16 @@ export class PushTokenStore {
     this.logger.debug({ provider, total: this.total() }, "Revoked token");
   }
 
-  /** Live tokens grouped by provider, pruning anything expired. */
-  getActiveTokensByProvider(): Map<string, string[]> {
+  /** Live subscriptions grouped by provider, pruning anything expired. */
+  getActiveSubscriptionsByProvider(): Map<string, PushSubscription[]> {
     const now = this.now();
-    const active = new Map<string, Map<string, number>>();
+    const active = new Map<string, Map<string, StoredSubscription>>();
     let pruned = false;
 
     for (const [provider, tokens] of this.subscriptions) {
-      const live = new Map<string, number>();
-      for (const [token, expiresAt] of tokens) {
-        if (expiresAt > now) live.set(token, expiresAt);
+      const live = new Map<string, StoredSubscription>();
+      for (const [token, stored] of tokens) {
+        if (stored.expiresAt > now) live.set(token, stored);
         else pruned = true;
       }
       if (live.size > 0) active.set(provider, live);
@@ -99,9 +123,16 @@ export class PushTokenStore {
       }
     }
 
-    const result = new Map<string, string[]>();
+    const result = new Map<string, PushSubscription[]>();
     for (const [provider, tokens] of active) {
-      result.set(provider, Array.from(tokens.keys()));
+      result.set(
+        provider,
+        Array.from(tokens, ([token, stored]) => ({
+          provider,
+          token,
+          ...(stored.metadata ? { metadata: stored.metadata } : {}),
+        })),
+      );
     }
     return result;
   }
@@ -112,8 +143,8 @@ export class PushTokenStore {
     return count;
   }
 
-  private clone(): Map<string, Map<string, number>> {
-    const next = new Map<string, Map<string, number>>();
+  private clone(): Map<string, Map<string, StoredSubscription>> {
+    const next = new Map<string, Map<string, StoredSubscription>>();
     for (const [provider, tokens] of this.subscriptions) {
       next.set(provider, new Map(tokens));
     }
@@ -132,7 +163,7 @@ export class PushTokenStore {
         tokens?: unknown;
         providers?: unknown;
       };
-      const loaded = new Map<string, Map<string, number>>();
+      const loaded = new Map<string, Map<string, StoredSubscription>>();
 
       // COMPAT(pushProviders): `subscriptions` predates provider ids and can
       // only ever have held Expo tokens. Remove after 2027-02-01, once no
@@ -156,11 +187,11 @@ export class PushTokenStore {
         : [];
       if (legacyTokens.length > 0) {
         const migrated = this.clone();
-        const forExpo = migrated.get(EXPO_PROVIDER_ID) ?? new Map<string, number>();
+        const forExpo = migrated.get(EXPO_PROVIDER_ID) ?? new Map<string, StoredSubscription>();
         const expiresAt = this.now() + this.leaseMs;
         for (const token of legacyTokens) {
           const normalized = token.trim();
-          if (normalized) forExpo.set(normalized, expiresAt);
+          if (normalized) forExpo.set(normalized, { expiresAt });
         }
         migrated.set(EXPO_PROVIDER_ID, forExpo);
         this.persist(migrated);
@@ -173,9 +204,11 @@ export class PushTokenStore {
     }
   }
 
-  private persist(subscriptions: ReadonlyMap<string, ReadonlyMap<string, number>>): void {
+  private persist(
+    subscriptions: ReadonlyMap<string, ReadonlyMap<string, StoredSubscription>>,
+  ): void {
     try {
-      const providers: Record<string, { token: string; expiresAt: string }[]> = {};
+      const providers: Record<string, SerialisedSubscription[]> = {};
       for (const [provider, tokens] of subscriptions) {
         if (provider === EXPO_PROVIDER_ID) continue;
         providers[provider] = serialiseList(tokens);
@@ -199,25 +232,52 @@ export class PushTokenStore {
   }
 }
 
-function readSubscriptionList(value: unknown): Map<string, number> {
-  const loaded = new Map<string, number>();
+interface SerialisedSubscription {
+  token: string;
+  expiresAt: string;
+  metadata?: Record<string, string>;
+}
+
+function readSubscriptionList(value: unknown): Map<string, StoredSubscription> {
+  const loaded = new Map<string, StoredSubscription>();
   if (!Array.isArray(value)) return loaded;
   for (const entry of value) {
     if (!entry || typeof entry !== "object") continue;
-    const candidate = entry as { token?: unknown; expiresAt?: unknown };
+    const candidate = entry as { token?: unknown; expiresAt?: unknown; metadata?: unknown };
     if (typeof candidate.token !== "string" || typeof candidate.expiresAt !== "string") continue;
     const token = candidate.token.trim();
     const expiresAt = Date.parse(candidate.expiresAt);
-    if (token && Number.isFinite(expiresAt)) loaded.set(token, expiresAt);
+    if (!token || !Number.isFinite(expiresAt)) continue;
+    const metadata = readMetadata(candidate.metadata);
+    loaded.set(token, { expiresAt, ...(metadata ? { metadata } : {}) });
   }
   return loaded;
 }
 
-function serialiseList(
-  tokens: ReadonlyMap<string, number>,
-): { token: string; expiresAt: string }[] {
-  return Array.from(tokens, ([token, expiresAt]) => ({
+/** Strings only — anything else is a provider bug, not something to persist. */
+function readMetadata(value: unknown): Record<string, string> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const entries = Object.entries(value as Record<string, unknown>).filter(
+    (entry): entry is [string, string] => typeof entry[1] === "string",
+  );
+  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+}
+
+function sameMetadata(
+  a: Record<string, string> | undefined,
+  b: Record<string, string> | undefined,
+): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  const keys = Object.keys(a);
+  if (keys.length !== Object.keys(b).length) return false;
+  return keys.every((key) => a[key] === b[key]);
+}
+
+function serialiseList(tokens: ReadonlyMap<string, StoredSubscription>): SerialisedSubscription[] {
+  return Array.from(tokens, ([token, stored]) => ({
     token,
-    expiresAt: new Date(expiresAt).toISOString(),
+    expiresAt: new Date(stored.expiresAt).toISOString(),
+    ...(stored.metadata ? { metadata: stored.metadata } : {}),
   }));
 }

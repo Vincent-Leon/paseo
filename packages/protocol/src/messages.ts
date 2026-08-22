@@ -2714,6 +2714,11 @@ export const RegisterPushTokenMessageSchema = z.object({
   // no client can still register a token without naming its delivery channel.
   // Absent means Expo, which is the only channel that existed before this field.
   provider: z.string().min(1).optional(),
+  // Provider-defined registration extras. A token is not always a single opaque
+  // string: UnifiedPush registers an endpoint URL plus the client's p256dh key
+  // and auth secret, because RFC 8291 encryption happens on the sending side.
+  // Expo and HMS carry none of this.
+  metadata: z.record(z.string(), z.string()).optional(),
 });
 
 export const PushUnregisterRequestSchema = z.object({

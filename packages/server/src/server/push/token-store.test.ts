@@ -86,7 +86,9 @@ describe("PushTokenStore persistence", () => {
     rejectWrites = true;
 
     expect(() => store.revokeToken("expo", "ExponentPushToken[test]")).toThrow("disk full");
-    expect(store.getActiveTokensByProvider().get("expo")).toEqual(["ExponentPushToken[test]"]);
+    expect(store.getActiveSubscriptionsByProvider().get("expo")).toEqual([
+      { provider: "expo", token: "ExponentPushToken[test]" },
+    ]);
     expect(JSON.parse(persisted)).toEqual({
       subscriptions: [
         {
@@ -98,7 +100,7 @@ describe("PushTokenStore persistence", () => {
 
     rejectWrites = false;
     store.revokeToken("expo", "ExponentPushToken[test]");
-    expect(store.getActiveTokensByProvider().size).toBe(0);
+    expect(store.getActiveSubscriptionsByProvider().size).toBe(0);
     expect(JSON.parse(persisted)).toEqual({ subscriptions: [] });
   });
 });
@@ -123,9 +125,9 @@ describe("PushTokenStore providers", () => {
     store.renewToken("expo", "ExponentPushToken[a]");
     store.renewToken("huawei", "hms-token-b");
 
-    const active = store.getActiveTokensByProvider();
-    expect(active.get("expo")).toEqual(["ExponentPushToken[a]"]);
-    expect(active.get("huawei")).toEqual(["hms-token-b"]);
+    const active = store.getActiveSubscriptionsByProvider();
+    expect(active.get("expo")).toEqual([{ provider: "expo", token: "ExponentPushToken[a]" }]);
+    expect(active.get("huawei")).toEqual([{ provider: "huawei", token: "hms-token-b" }]);
 
     // The layout is the compatibility contract: an older daemon reads only
     // `subscriptions`, so it must contain Expo tokens and nothing else.
@@ -145,8 +147,8 @@ describe("PushTokenStore providers", () => {
 
     store.revokeToken("huawei", "hms-token-b");
 
-    const active = store.getActiveTokensByProvider();
-    expect(active.get("expo")).toEqual(["ExponentPushToken[a]"]);
+    const active = store.getActiveSubscriptionsByProvider();
+    expect(active.get("expo")).toEqual([{ provider: "expo", token: "ExponentPushToken[a]" }]);
     expect(active.has("huawei")).toBe(false);
   });
 
@@ -168,15 +170,69 @@ describe("PushTokenStore providers", () => {
       const store = makeStore((payload) => {
         persisted = payload;
       }, tokenPath);
-      expect(store.getActiveTokensByProvider().get("expo")).toEqual(["ExponentPushToken[legacy]"]);
+      expect(store.getActiveSubscriptionsByProvider().get("expo")).toEqual([
+        { provider: "expo", token: "ExponentPushToken[legacy]" },
+      ]);
 
       store.renewToken("huawei", "hms-token-c");
       writeFileSync(tokenPath, persisted);
 
       const reloaded = makeStore(() => undefined, tokenPath);
-      const active = reloaded.getActiveTokensByProvider();
-      expect(active.get("expo")).toEqual(["ExponentPushToken[legacy]"]);
-      expect(active.get("huawei")).toEqual(["hms-token-c"]);
+      const active = reloaded.getActiveSubscriptionsByProvider();
+      expect(active.get("expo")).toEqual([
+        { provider: "expo", token: "ExponentPushToken[legacy]" },
+      ]);
+      expect(active.get("huawei")).toEqual([{ provider: "huawei", token: "hms-token-c" }]);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("PushTokenStore provider metadata", () => {
+  test("round-trips metadata and keeps it across a renewal that omits it", () => {
+    const home = mkdtempSync(path.join(tmpdir(), "paseo-push-metadata-"));
+    const tokenPath = path.join(home, "push-tokens.json");
+    try {
+      let now = Date.parse("2026-08-10T00:00:00.000Z");
+      const store = new PushTokenStore(createLogger(), tokenPath, () => now, 48 * 60 * 60 * 1000);
+
+      // UnifiedPush registers an endpoint plus the keys the sender encrypts with.
+      store.renewToken("unifiedpush", "https://push.example/UP123", {
+        p256dh: "BExampleKey",
+        auth: "ExampleAuth",
+      });
+
+      const registered = store.getActiveSubscriptionsByProvider().get("unifiedpush");
+      expect(registered).toEqual([
+        {
+          provider: "unifiedpush",
+          token: "https://push.example/UP123",
+          metadata: { p256dh: "BExampleKey", auth: "ExampleAuth" },
+        },
+      ]);
+
+      // A heartbeat renewal carries no metadata and must not erase it.
+      now += 25 * 60 * 60 * 1000;
+      store.renewToken("unifiedpush", "https://push.example/UP123");
+      expect(store.getActiveSubscriptionsByProvider().get("unifiedpush")?.[0]?.metadata).toEqual({
+        p256dh: "BExampleKey",
+        auth: "ExampleAuth",
+      });
+
+      // And it survives a reload from disk.
+      const reloaded = new PushTokenStore(
+        createLogger(),
+        tokenPath,
+        () => now,
+        48 * 60 * 60 * 1000,
+      );
+      expect(reloaded.getActiveSubscriptionsByProvider().get("unifiedpush")?.[0]?.metadata).toEqual(
+        {
+          p256dh: "BExampleKey",
+          auth: "ExampleAuth",
+        },
+      );
     } finally {
       rmSync(home, { recursive: true, force: true });
     }

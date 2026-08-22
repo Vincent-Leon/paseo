@@ -7,6 +7,24 @@ export interface PushPayload {
 }
 
 /**
+ * One device's registration with one provider.
+ *
+ * `token` is the primary identifier and what the store keys on. `metadata`
+ * exists because a token is not always a single opaque string: UnifiedPush
+ * registers an endpoint URL plus the client's `p256dh` public key and `auth`
+ * secret, since RFC 8291 encryption happens on the sending side. Expo and HMS
+ * carry none.
+ *
+ * Contents are provider-defined; the store keeps them as opaque strings and only
+ * the owning provider interprets them.
+ */
+export interface PushSubscription {
+  readonly provider: string;
+  readonly token: string;
+  readonly metadata?: Readonly<Record<string, string>>;
+}
+
+/**
  * A delivery channel for push notifications.
  *
  * Providers are stateless with respect to the token store: they are handed the
@@ -19,12 +37,15 @@ export interface PushProvider {
   readonly providerId: string;
 
   /**
-   * Delivers to every token.
+   * Delivers to every subscription.
    *
    * Must not throw: one provider failing has to leave the others unaffected.
    * Transport errors are the provider's own to log and swallow.
    */
-  deliver(tokens: readonly string[], payload: PushPayload): Promise<PushDeliveryResult>;
+  deliver(
+    subscriptions: readonly PushSubscription[],
+    payload: PushPayload,
+  ): Promise<PushDeliveryResult>;
 }
 
 export interface PushDeliveryResult {
@@ -37,6 +58,7 @@ export interface PushDeliveryResult {
    * cannot honour that, and would drop tokens that are still live on disk.
    *
    * Only permanent failures belong here. A timeout or a 500 is not one.
+   * Identified by token, which is unique within a provider.
    */
   readonly revokedTokens?: readonly string[];
 }

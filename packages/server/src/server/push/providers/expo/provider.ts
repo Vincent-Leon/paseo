@@ -5,6 +5,7 @@ import type {
   PushPayload,
   PushProvider,
   PushProviderFactoryOptions,
+  PushSubscription,
 } from "../../push-provider.js";
 
 interface ExpoPushMessage {
@@ -61,12 +62,16 @@ export class ExpoPushProvider implements PushProvider {
     this.fetchImpl = options.fetch ?? fetch;
   }
 
-  async deliver(tokens: readonly string[], payload: PushPayload): Promise<PushDeliveryResult> {
-    if (tokens.length === 0) {
+  async deliver(
+    subscriptions: readonly PushSubscription[],
+    payload: PushPayload,
+  ): Promise<PushDeliveryResult> {
+    if (subscriptions.length === 0) {
       return {};
     }
 
-    const messages: ExpoPushMessage[] = tokens.map((token) => ({
+    // Expo needs no metadata; the token is the whole registration.
+    const messages: ExpoPushMessage[] = subscriptions.map(({ token }) => ({
       to: token,
       title: payload.title,
       body: payload.body,

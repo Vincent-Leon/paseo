@@ -1,11 +1,11 @@
 import type pino from "pino";
 
 import { PUSH_PROVIDERS } from "./manifest.js";
-import type { PushPayload, PushProvider } from "./push-provider.js";
+import type { PushPayload, PushProvider, PushSubscription } from "./push-provider.js";
 import { EXPO_PROVIDER_ID } from "./providers/expo/provider.js";
 import { PushTokenStore } from "./token-store.js";
 
-export type { PushPayload, PushProvider } from "./push-provider.js";
+export type { PushPayload, PushProvider, PushSubscription } from "./push-provider.js";
 
 const PUSH_TOKEN_LEASE_MS = 48 * 60 * 60 * 1000;
 
@@ -18,7 +18,8 @@ const PUSH_TOKEN_LEASE_MS = 48 * 60 * 60 * 1000;
 export const DEFAULT_PUSH_PROVIDER = EXPO_PROVIDER_ID;
 
 export interface PushNotifications {
-  renew(token: string, provider?: string): void;
+  /** `metadata` is provider-defined and only supplied at registration. */
+  renew(token: string, provider?: string, metadata?: Record<string, string>): void;
   revoke(token: string, provider?: string): void;
   send(payload: PushPayload): Promise<void>;
   /** Provider ids this daemon can actually deliver through, for capability gating. */
@@ -53,8 +54,8 @@ export function createPushNotifications(options: {
   }
 
   return {
-    renew(token, provider = EXPO_PROVIDER_ID) {
-      store.renewToken(provider, token);
+    renew(token, provider = EXPO_PROVIDER_ID, metadata) {
+      store.renewToken(provider, token, metadata);
     },
     revoke(token, provider = EXPO_PROVIDER_ID) {
       store.revokeToken(provider, token);
@@ -63,32 +64,35 @@ export function createPushNotifications(options: {
       return Array.from(providers.keys());
     },
     async send(payload) {
-      const byProvider = store.getActiveTokensByProvider();
+      const byProvider = store.getActiveSubscriptionsByProvider();
       const tokenCount = Array.from(byProvider.values()).reduce(
-        (total, tokens) => total + tokens.length,
+        (total, subscriptions) => total + subscriptions.length,
         0,
       );
       options.logger.info({ tokenCount }, "Sending push notification");
       if (tokenCount === 0) return;
 
       if (options.deliver) {
-        await options.deliver(Array.from(byProvider.values()).flat(), payload);
+        const tokens = Array.from(byProvider.values())
+          .flat()
+          .map((subscription: PushSubscription) => subscription.token);
+        await options.deliver(tokens, payload);
         return;
       }
 
       // One failing channel must not stop the others, so each is awaited
       // independently and its revocations applied on its own.
       await Promise.all(
-        Array.from(byProvider, async ([providerId, tokens]) => {
+        Array.from(byProvider, async ([providerId, subscriptions]) => {
           const provider = providers.get(providerId);
           if (!provider) {
             options.logger.warn(
-              { provider: providerId, tokenCount: tokens.length },
+              { provider: providerId, tokenCount: subscriptions.length },
               "No provider registered for stored tokens",
             );
             return;
           }
-          const result = await provider.deliver(tokens, payload);
+          const result = await provider.deliver(subscriptions, payload);
           for (const token of result.revokedTokens ?? []) {
             store.revokeToken(providerId, token);
           }
