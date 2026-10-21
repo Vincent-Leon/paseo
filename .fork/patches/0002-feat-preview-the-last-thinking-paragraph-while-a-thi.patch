@@ -1,0 +1,651 @@
+From b1cddc53c38997e7bed0a9c61f878ab9a8583924 Mon Sep 17 00:00:00 2001
+From: Vincent Leon <leon@mbp.com>
+Date: Wed, 21 Oct 2026 14:47:35 +0800
+Subject: [PATCH 2/2] feat: preview the last thinking paragraph while a
+ thinking group is collapsed
+
+Agents often end a thinking group with a short note to the user (what they
+found, what they do next) that never appears as a reply, so it stays hidden
+inside the collapsed Thinking row. Show the group's last paragraph under the
+header, muted and clamped to two lines, unless an assistant reply directly
+follows and already covers the step.
+
+Claude streams several thinking blocks of one message into a single reasoning
+text with nothing between them. When the stream announces a new thinking block
+right after another one, the timeline assembler now starts it on its own
+paragraph, and absolute snapshots join blocks the same way so nothing is
+re-emitted. Without block starts the output is unchanged.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../src/agent-stream/thought-preview.test.ts  | 164 ++++++++++++++++++
+ .../app/src/agent-stream/thought-preview.ts   |  38 ++++
+ packages/app/src/agent-stream/view.tsx        |   5 +
+ packages/app/src/components/message.tsx       |  21 +++
+ .../claude/agent.timeline-assembly.test.ts    | 108 ++++++++++++
+ .../server/agent/providers/claude/agent.ts    |  84 +++++++--
+ 6 files changed, 406 insertions(+), 14 deletions(-)
+ create mode 100644 packages/app/src/agent-stream/thought-preview.test.ts
+ create mode 100644 packages/app/src/agent-stream/thought-preview.ts
+
+diff --git a/packages/app/src/agent-stream/thought-preview.test.ts b/packages/app/src/agent-stream/thought-preview.test.ts
+new file mode 100644
+index 000000000..a720264f8
+--- /dev/null
++++ b/packages/app/src/agent-stream/thought-preview.test.ts
+@@ -0,0 +1,164 @@
++import { describe, expect, it } from "vitest";
++import type { StreamItem, ThoughtItem } from "@/types/stream";
++import { buildAgentStreamRenderModel } from "./model";
++import { layoutStream } from "./layout";
++import { resolveStreamRenderStrategy } from "./strategy-resolver";
++import { getThoughtPreview, THOUGHT_PREVIEW_MAX_LENGTH } from "./thought-preview";
++
++const TURN_ID = "turn-1";
++
++function at(second: number): Date {
++  return new Date(`2026-01-01T00:00:${second.toString().padStart(2, "0")}.000Z`);
++}
++
++function thought(text: string, status: ThoughtItem["status"] = "ready"): ThoughtItem {
++  return { kind: "thought", id: "thought", text, timestamp: at(2), status, turnId: TURN_ID };
++}
++
++function user(): StreamItem {
++  return { kind: "user_message", id: "user", text: "Go", timestamp: at(1), turnId: TURN_ID };
++}
++
++function assistant(): StreamItem {
++  return {
++    kind: "assistant_message",
++    id: "assistant",
++    text: "Done.",
++    timestamp: at(3),
++    turnId: TURN_ID,
++  };
++}
++
++function toolCall(): StreamItem {
++  return {
++    kind: "tool_call",
++    id: "tool",
++    timestamp: at(3),
++    turnId: TURN_ID,
++    payload: {
++      source: "agent",
++      data: {
++        provider: "claude",
++        callId: "tool",
++        name: "Bash",
++        status: "running",
++        error: null,
++        detail: { type: "unknown", input: null, output: null },
++      },
++    },
++  };
++}
++
++const MULTI_BLOCK_TEXT =
++  "The reducer merges reasoning chunks without a separator.\nCheck the server side next.\n\n" +
++  "确认了：同一消息里的多个思考块被直接拼接。接下来我会在服务端插入段落分隔，再改客户端预览。";
++
++describe("getThoughtPreview", () => {
++  it("previews the last block of a multi-block thought that ends in Chinese", () => {
++    expect(getThoughtPreview({ thought: thought(MULTI_BLOCK_TEXT), belowItem: toolCall() })).toBe(
++      "确认了：同一消息里的多个思考块被直接拼接。接下来我会在服务端插入段落分隔，再改客户端预览。",
++    );
++  });
++
++  it("previews a single-block thought as one line of text", () => {
++    expect(
++      getThoughtPreview({
++        thought: thought("Read the config.\nThen run   the build."),
++        belowItem: toolCall(),
++      }),
++    ).toBe("Read the config. Then run the build.");
++  });
++
++  it("does not preview a thought that a reply directly follows", () => {
++    expect(getThoughtPreview({ thought: thought(MULTI_BLOCK_TEXT), belowItem: assistant() })).toBe(
++      null,
++    );
++  });
++
++  it("previews a thought that a tool call follows", () => {
++    expect(getThoughtPreview({ thought: thought("Run the tests."), belowItem: toolCall() })).toBe(
++      "Run the tests.",
++    );
++  });
++
++  it("previews a thought that ends the turn", () => {
++    expect(getThoughtPreview({ thought: thought("Nothing left to do."), belowItem: null })).toBe(
++      "Nothing left to do.",
++    );
++    expect(getThoughtPreview({ thought: thought("Nothing left to do."), belowItem: user() })).toBe(
++      "Nothing left to do.",
++    );
++  });
++
++  it("does not preview an empty thought", () => {
++    expect(getThoughtPreview({ thought: thought(""), belowItem: toolCall() })).toBe(null);
++    expect(getThoughtPreview({ thought: thought(" \n\n \n"), belowItem: toolCall() })).toBe(null);
++  });
++
++  it("ignores trailing blank paragraphs", () => {
++    expect(
++      getThoughtPreview({ thought: thought("First.\n\nSecond.\n\n  \n"), belowItem: null }),
++    ).toBe("Second.");
++  });
++
++  it("does not preview a thought that is still streaming", () => {
++    expect(
++      getThoughtPreview({ thought: thought("Still thinking", "loading"), belowItem: null }),
++    ).toBe(null);
++  });
++
++  it("truncates a long last paragraph with an ellipsis", () => {
++    const paragraph = "思".repeat(THOUGHT_PREVIEW_MAX_LENGTH + 50);
++
++    const preview = getThoughtPreview({
++      thought: thought(`Earlier.\n\n${paragraph}`),
++      belowItem: toolCall(),
++    });
++
++    expect(preview).toBe(`${"思".repeat(THOUGHT_PREVIEW_MAX_LENGTH - 1)}…`);
++  });
++
++  it("does not split a surrogate pair when truncating", () => {
++    const paragraph = "😀".repeat(THOUGHT_PREVIEW_MAX_LENGTH + 1);
++
++    const preview = getThoughtPreview({ thought: thought(paragraph), belowItem: toolCall() });
++
++    expect(preview).toBe(`${"😀".repeat(THOUGHT_PREVIEW_MAX_LENGTH - 1)}…`);
++  });
++});
++
++describe("thought preview in a laid-out stream", () => {
++  function previewsFor(items: StreamItem[], platform: "web" | "native"): Array<string | null> {
++    const model = buildAgentStreamRenderModel({
++      isTurnActive: false,
++      activeTurnStartedAt: null,
++      tail: items,
++      head: [],
++      platform,
++      isMobileBreakpoint: platform === "native",
++    });
++    const layout = layoutStream({
++      strategy: resolveStreamRenderStrategy({
++        platform,
++        isMobileBreakpoint: platform === "native",
++      }),
++      isTurnActive: false,
++      history: model.segments.historyMounted,
++      liveHead: model.segments.liveHead,
++      timingByAssistantId: model.turnTiming.byAssistantId,
++    });
++    return [...layout.history, ...layout.liveHead].flatMap((row) =>
++      row.item.kind === "thought"
++        ? [getThoughtPreview({ thought: row.item, belowItem: row.belowItem })]
++        : [],
++    );
++  }
++
++  it.each(["web", "native"] as const)(
++    "hides the preview only when a reply follows the thought (%s)",
++    (platform) => {
++      expect(previewsFor([user(), thought("Plan."), assistant()], platform)).toEqual([null]);
++      expect(previewsFor([user(), thought("Plan."), toolCall()], platform)).toEqual(["Plan."]);
++    },
++  );
++});
+diff --git a/packages/app/src/agent-stream/thought-preview.ts b/packages/app/src/agent-stream/thought-preview.ts
+new file mode 100644
+index 000000000..cb72b9c6c
+--- /dev/null
++++ b/packages/app/src/agent-stream/thought-preview.ts
+@@ -0,0 +1,38 @@
++import type { StreamItem, ThoughtItem } from "@/types/stream";
++
++// The view clamps the preview to two lines; this only bounds how much text it lays out.
++export const THOUGHT_PREVIEW_MAX_LENGTH = 240;
++
++const PARAGRAPH_BREAK = /\n\s*\n/;
++
++export interface ThoughtPreviewInput {
++  thought: ThoughtItem;
++  belowItem: StreamItem | null;
++}
++
++// Agents often end a thinking group with a note to the user (what they found, what they do
++// next) that is never repeated as a reply. Surface that last paragraph while the group is
++// collapsed, unless a reply directly follows and already covers the step.
++export function getThoughtPreview(input: ThoughtPreviewInput): string | null {
++  if (input.thought.status !== "ready" || input.belowItem?.kind === "assistant_message") {
++    return null;
++  }
++  const paragraphs = input.thought.text
++    .split(PARAGRAPH_BREAK)
++    .map((paragraph) => paragraph.replace(/\s+/g, " ").trim())
++    .filter((paragraph) => paragraph.length > 0);
++  const lastParagraph = paragraphs.at(-1);
++  if (!lastParagraph) {
++    return null;
++  }
++  return truncate(lastParagraph);
++}
++
++function truncate(text: string): string {
++  const characters = Array.from(text);
++  if (characters.length <= THOUGHT_PREVIEW_MAX_LENGTH) {
++    return text;
++  }
++  const kept = characters.slice(0, THOUGHT_PREVIEW_MAX_LENGTH - 1).join("");
++  return `${kept.trimEnd()}…`;
++}
+diff --git a/packages/app/src/agent-stream/view.tsx b/packages/app/src/agent-stream/view.tsx
+index d662a2f34..ba3574db1 100644
+--- a/packages/app/src/agent-stream/view.tsx
++++ b/packages/app/src/agent-stream/view.tsx
+@@ -81,6 +81,7 @@ import {
+ } from "./turn-footer";
+ import { resolveBottomOverlayTailInset } from "./bottom-overlay-inset";
+ import { layoutStream, type StreamLayoutItem } from "./layout";
++import { getThoughtPreview } from "./thought-preview";
+ import {
+   type BottomAnchorLocalRequest,
+   type BottomAnchorRouteRequest,
+@@ -727,6 +728,7 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
+             onInlineDetailsExpandedChangeByItemId={setInlineDetailsExpanded}
+             text={item.text}
+             status={item.status}
++            preview={getThoughtPreview({ thought: item, belowItem: layoutItem.belowItem })}
+             isLastInSequence={layoutItem.isLastInToolSequence}
+             defaultExpanded={autoExpandReasoning}
+           />
+@@ -1279,6 +1281,7 @@ interface ThoughtSlotProps {
+   onInlineDetailsExpandedChangeByItemId: (itemId: string, expanded: boolean) => void;
+   text: string;
+   status: Extract<StreamItem, { kind: "thought" }>["status"];
++  preview: string | null;
+   isLastInSequence: boolean;
+   defaultExpanded: boolean;
+ }
+@@ -1289,6 +1292,7 @@ function ThoughtSlot({
+   onInlineDetailsExpandedChangeByItemId,
+   text,
+   status,
++  preview,
+   isLastInSequence,
+   defaultExpanded,
+ }: ThoughtSlotProps) {
+@@ -1298,6 +1302,7 @@ function ThoughtSlot({
+       itemId={itemId}
+       onInlineDetailsExpandedChangeByItemId={onInlineDetailsExpandedChangeByItemId}
+       toolName="thinking"
++      preview={preview}
+       args={revealedText}
+       status={status === "ready" ? "completed" : "executing"}
+       isLastInSequence={isLastInSequence}
+diff --git a/packages/app/src/components/message.tsx b/packages/app/src/components/message.tsx
+index d5a224450..c8203cb90 100644
+--- a/packages/app/src/components/message.tsx
++++ b/packages/app/src/components/message.tsx
+@@ -929,6 +929,14 @@ const expandableBadgeStylesheet = StyleSheet.create((theme) => ({
+   secondaryLabelActive: {
+     color: theme.colors.foreground,
+   },
++  preview: {
++    // Starts on the label's rail: past the icon badge and its right margin.
++    marginLeft: 22 + theme.spacing[1],
++    marginBottom: theme.spacing[0.5],
++    color: theme.colors.foregroundMuted,
++    fontSize: theme.fontSize.sm,
++    fontWeight: theme.fontWeight.normal,
++  },
+   shimmerText: {
+     color: "transparent",
+     fontSize: theme.fontSize.base,
+@@ -1503,6 +1511,8 @@ export const TodoListCard = memo(function TodoListCard({
+ interface ExpandableBadgeProps {
+   label: string;
+   secondaryLabel?: string;
++  // Shown under the header while collapsed.
++  preview?: string | null;
+   icon?: ComponentType<{ size?: number; color?: string }>;
+   isExpanded: boolean;
+   style?: StyleProp<ViewStyle>;
+@@ -1867,6 +1877,7 @@ export const ExpandableBadge = memo(function ExpandableBadge({
+   label,
+   style,
+   secondaryLabel,
++  preview,
+   icon,
+   isExpanded,
+   onToggle,
+@@ -2173,6 +2184,11 @@ export const ExpandableBadge = memo(function ExpandableBadge({
+             onOpenFileHoverOut={handleOpenFileHoverOut}
+           />
+         </View>
++        {preview && !isExpanded ? (
++          <Text style={expandableBadgeStylesheet.preview} numberOfLines={2}>
++            {preview}
++          </Text>
++        ) : null}
+       </Pressable>
+       {detailContent ? (
+         <Pressable
+@@ -2191,6 +2207,7 @@ export const ExpandableBadge = memo(function ExpandableBadge({
+ function areExpandableBadgePropsEqual(previous: ExpandableBadgeProps, next: ExpandableBadgeProps) {
+   if (previous.label !== next.label) return false;
+   if (previous.secondaryLabel !== next.secondaryLabel) return false;
++  if (previous.preview !== next.preview) return false;
+   if (previous.icon !== next.icon) return false;
+   if (previous.isExpanded !== next.isExpanded) return false;
+   if (previous.style !== next.style) return false;
+@@ -2211,6 +2228,7 @@ interface ToolCallProps {
+   agentMessage?: AgentMessage;
+   serverId?: string;
+   toolName: string;
++  preview?: string | null;
+   args?: unknown;
+   result?: unknown;
+   error?: unknown;
+@@ -2232,6 +2250,7 @@ export const ToolCall = memo(function ToolCall({
+   agentMessage,
+   serverId,
+   toolName,
++  preview,
+   args,
+   result,
+   error,
+@@ -2382,6 +2401,7 @@ export const ToolCall = memo(function ToolCall({
+       testID="tool-call-badge"
+       label={presentation.displayName}
+       secondaryLabel={presentation.summary}
++      preview={preview}
+       icon={presentation.icon}
+       isExpanded={shouldRenderInline && isExpanded}
+       onToggle={presentation.canOpenDetails ? handleToggle : undefined}
+@@ -2398,6 +2418,7 @@ export const ToolCall = memo(function ToolCall({
+ 
+ function areToolCallPropsEqual(previous: ToolCallProps, next: ToolCallProps) {
+   if (previous.toolName !== next.toolName) return false;
++  if (previous.preview !== next.preview) return false;
+   if (previous.serverId !== next.serverId) return false;
+   if (previous.agentMessage !== next.agentMessage) return false;
+   if (previous.args !== next.args) return false;
+diff --git a/packages/server/src/server/agent/providers/claude/agent.timeline-assembly.test.ts b/packages/server/src/server/agent/providers/claude/agent.timeline-assembly.test.ts
+index 281f380f1..14aa2c764 100644
+--- a/packages/server/src/server/agent/providers/claude/agent.timeline-assembly.test.ts
++++ b/packages/server/src/server/agent/providers/claude/agent.timeline-assembly.test.ts
+@@ -86,6 +86,18 @@ function textDelta(text: string): SdkEvent {
+   return streamEvent({ type: "content_block_delta", delta: { type: "text_delta", text } });
+ }
+ 
++function blockStart(contentBlock: Record<string, unknown>): SdkEvent {
++  return streamEvent({ type: "content_block_start", content_block: contentBlock });
++}
++
++function thinkingBlockStart(): SdkEvent {
++  return blockStart({ type: "thinking", thinking: "", signature: "" });
++}
++
++function textBlockStart(): SdkEvent {
++  return blockStart({ type: "text", text: "" });
++}
++
+ function thinkingBlock(thinking: string) {
+   return { type: "thinking", thinking, signature: "sig" };
+ }
+@@ -318,4 +330,100 @@ describe("Claude timeline assembly", () => {
+       assistant: ["Done.", "Checking again.", "Done."],
+     });
+   });
++
++  describe("with content block starts, as the live stream sends them", () => {
++    test("starts each thinking block of a message on its own paragraph", async () => {
++      const emitted = await runTurn([
++        messageStart(),
++        thinkingBlockStart(),
++        thinkingDelta("Check the reducer."),
++        assistantMessage([thinkingBlock("Check the reducer.")]),
++        thinkingBlockStart(),
++        thinkingDelta("确认了合并逻辑，"),
++        thinkingDelta("接下来改客户端。"),
++        assistantMessage([thinkingBlock("确认了合并逻辑，接下来改客户端。")]),
++        messageStop(),
++      ]);
++
++      expect(emitted).toEqual({
++        reasoning: ["Check the reducer.", "\n\n确认了合并逻辑，", "接下来改客户端。"],
++        assistant: [],
++      });
++    });
++
++    test("does not add a blank line when the previous block already ends with one", async () => {
++      const emitted = await runTurn([
++        messageStart(),
++        thinkingBlockStart(),
++        thinkingDelta("First thought.\n"),
++        thinkingBlockStart(),
++        thinkingDelta("Second thought.\n\n"),
++        thinkingBlockStart(),
++        thinkingDelta("Third thought."),
++        messageStop(),
++      ]);
++
++      expect(emitted).toEqual({
++        reasoning: ["First thought.\n", "\nSecond thought.\n\n", "Third thought."],
++        assistant: [],
++      });
++    });
++
++    test("does not separate a thinking block that follows a text block", async () => {
++      const emitted = await runTurn([
++        messageStart(),
++        thinkingBlockStart(),
++        thinkingDelta("First thought."),
++        textBlockStart(),
++        textDelta("Answer."),
++        thinkingBlockStart(),
++        thinkingDelta("Second thought."),
++        messageStop(),
++      ]);
++
++      expect(emitted).toEqual({
++        reasoning: ["First thought.", "Second thought."],
++        assistant: ["Answer."],
++      });
++    });
++
++    test("does not repeat streamed blocks when a cumulative assistant message follows", async () => {
++      const emitted = await runTurn([
++        messageStart(),
++        thinkingBlockStart(),
++        thinkingDelta("First thought."),
++        thinkingBlockStart(),
++        thinkingDelta("Second thought."),
++        textBlockStart(),
++        textDelta("Answer."),
++        assistantMessage([
++          thinkingBlock("First thought."),
++          thinkingBlock("Second thought."),
++          textBlock("Answer."),
++        ]),
++        messageStop(),
++      ]);
++
++      expect(emitted).toEqual({
++        reasoning: ["First thought.", "\n\nSecond thought."],
++        assistant: ["Answer."],
++      });
++    });
++
++    test("separates a block that arrives only as its own assistant message", async () => {
++      const emitted = await runTurn([
++        messageStart(),
++        thinkingBlockStart(),
++        thinkingDelta("First thought."),
++        assistantMessage([thinkingBlock("First thought.")]),
++        assistantMessage([thinkingBlock("Second thought.")]),
++        messageStop(),
++      ]);
++
++      expect(emitted).toEqual({
++        reasoning: ["First thought.", "\n\nSecond thought."],
++        assistant: [],
++      });
++    });
++  });
+ });
+diff --git a/packages/server/src/server/agent/providers/claude/agent.ts b/packages/server/src/server/agent/providers/claude/agent.ts
+index 9049a3a5c..6f6ce4349 100644
+--- a/packages/server/src/server/agent/providers/claude/agent.ts
++++ b/packages/server/src/server/agent/providers/claude/agent.ts
+@@ -1197,6 +1197,26 @@ interface TimelineMessageState {
+   emittedAssistantLength: number;
+   emittedReasoningLength: number;
+   stopped: boolean;
++  // Set once the stream announces thinking blocks, so absolute snapshots join blocks the same way.
++  separatesReasoningBlocks: boolean;
++  startsReasoningBlock: boolean;
++  lastFragmentKind: TimelineFragment["kind"] | null;
++}
++
++type JoinText = (accumulated: string, incoming: string) => string;
++
++function concatText(accumulated: string, incoming: string): string {
++  return accumulated + incoming;
++}
++
++// Thinking blocks of one message reach clients as one reasoning text. Starting each block on
++// its own paragraph lets clients find where the last block begins.
++function appendReasoningBlock(accumulated: string, block: string): string {
++  if (accumulated.length === 0 || accumulated.endsWith("\n\n")) {
++    return accumulated + block;
++  }
++  const separator = accumulated.endsWith("\n") ? "\n" : "\n\n";
++  return accumulated + separator + block;
+ }
+ 
+ // An assistant message carries either a cumulative snapshot of the API message or, as the
+@@ -1207,14 +1227,14 @@ interface TimelineMessageState {
+ // messages on (always, in production) the stream deltas carry every block, so two identical
+ // blocks are both shown. Without stream deltas, a block that matches the end of the text
+ // before it cannot be told apart from a re-delivered snapshot and is not shown again.
+-function mergeAbsoluteText(accumulated: string, incoming: string): string {
++function mergeAbsoluteText(accumulated: string, incoming: string, join: JoinText): string {
+   if (incoming.startsWith(accumulated)) {
+     return incoming;
+   }
+   if (accumulated.endsWith(incoming)) {
+     return accumulated;
+   }
+-  return accumulated + incoming;
++  return join(accumulated, incoming);
+ }
+ 
+ class TimelineAssembler {
+@@ -1292,7 +1312,7 @@ class TimelineAssembler {
+     }
+ 
+     if (eventType === "content_block_start") {
+-      return this.consumeDeltaContent(event.content_block, runId, streamEventMessageId);
++      return this.consumeBlockStart(event.content_block, runId, streamEventMessageId);
+     }
+ 
+     if (eventType === "content_block_delta") {
+@@ -1302,6 +1322,27 @@ class TimelineAssembler {
+     return [];
+   }
+ 
++  private consumeBlockStart(
++    block: unknown,
++    runId: string | null,
++    messageIdHint: string | null,
++  ): AgentTimelineItem[] {
++    if (isClaudeContentChunk(block) && block.type === "thinking") {
++      const messageId = this.resolveMessageId({
++        runId,
++        createIfMissing: true,
++        messageId: messageIdHint,
++      });
++      if (messageId) {
++        const state = this.ensureMessageState(messageId, runId);
++        state.separatesReasoningBlocks = true;
++        // After a text block the client already shows the next thinking block on its own.
++        state.startsReasoningBlock = state.lastFragmentKind === "reasoning";
++      }
++    }
++    return this.consumeDeltaContent(block, runId, messageIdHint);
++  }
++
+   private consumeDeltaContent(
+     content: unknown,
+     runId: string | null,
+@@ -1331,8 +1372,11 @@ class TimelineAssembler {
+       if (fragment.kind === "assistant") {
+         state.assistantText += fragment.text;
+       } else {
+-        state.reasoningText += fragment.text;
++        const join = state.startsReasoningBlock ? appendReasoningBlock : concatText;
++        state.reasoningText = join(state.reasoningText, fragment.text);
++        state.startsReasoningBlock = false;
+       }
++      state.lastFragmentKind = fragment.kind;
+     }
+     return this.emitNewContent(state);
+   }
+@@ -1341,20 +1385,29 @@ class TimelineAssembler {
+     state: TimelineMessageState,
+     fragments: TimelineFragment[],
+   ): AgentTimelineItem[] {
+-    const assistantText = fragments
+-      .filter((fragment) => fragment.kind === "assistant")
+-      .map((fragment) => fragment.text)
+-      .join("");
+-    const reasoningText = fragments
+-      .filter((fragment) => fragment.kind === "reasoning")
+-      .map((fragment) => fragment.text)
+-      .join("");
++    const joinReasoning = state.separatesReasoningBlocks ? appendReasoningBlock : concatText;
++    let assistantText = "";
++    let reasoningText = "";
++    let previousKind: TimelineFragment["kind"] | null = null;
++    for (const fragment of fragments) {
++      if (fragment.kind === "assistant") {
++        assistantText += fragment.text;
++      } else {
++        const join = previousKind === "reasoning" ? joinReasoning : concatText;
++        reasoningText = join(reasoningText, fragment.text);
++      }
++      previousKind = fragment.kind;
++    }
+ 
+     if (assistantText.length > 0) {
+-      state.assistantText = mergeAbsoluteText(state.assistantText, assistantText);
++      state.assistantText = mergeAbsoluteText(state.assistantText, assistantText, concatText);
+     }
+     if (reasoningText.length > 0) {
+-      state.reasoningText = mergeAbsoluteText(state.reasoningText, reasoningText);
++      const join = state.lastFragmentKind === "reasoning" ? joinReasoning : concatText;
++      state.reasoningText = mergeAbsoluteText(state.reasoningText, reasoningText, join);
++    }
++    if (previousKind) {
++      state.lastFragmentKind = previousKind;
+     }
+     return this.emitNewContent(state);
+   }
+@@ -1410,6 +1463,9 @@ class TimelineAssembler {
+       emittedAssistantLength: 0,
+       emittedReasoningLength: 0,
+       stopped: false,
++      separatesReasoningBlocks: false,
++      startsReasoningBlock: false,
++      lastFragmentKind: null,
+     };
+     this.messages.set(messageId, created);
+     if (runId) {
+-- 
+2.50.1 (Apple Git-155)
+

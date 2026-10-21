@@ -1,0 +1,5 @@
+# Tests the pipeline runs on the patched upstream tree before anything is signed.
+# One per line: <workspace directory> <test file relative to it>. List the tests that
+# cover each patch; the full suite never runs here.
+packages/server src/server/agent/providers/claude/agent.timeline-assembly.test.ts
+packages/app src/agent-stream/thought-preview.test.ts

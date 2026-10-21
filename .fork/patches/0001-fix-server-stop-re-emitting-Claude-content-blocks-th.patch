@@ -1,0 +1,402 @@
+From 6f3fa6ed37d1ed9eef522476b4313fa104829c76 Mon Sep 17 00:00:00 2001
+From: Vincent Leon <leon@mbp.com>
+Date: Wed, 21 Oct 2026 12:07:14 +0800
+Subject: [PATCH 1/2] fix(server): stop re-emitting Claude content blocks that
+ were already streamed
+
+The Claude Code SDK sends one assistant message per content block, all sharing
+the API message id. The timeline assembler treated each one as a cumulative
+snapshot, so when a second thinking or text block arrived after its stream
+deltas, the text no longer prefix-matched the accumulated text, the emitted
+counter reset, and the block was emitted a second time.
+
+Merge absolute assistant text instead: a growing snapshot replaces the
+accumulated text, a block already present at the end is treated as streamed,
+and any other block is appended. The merged text always extends what was
+emitted, so the emitted counters never reset.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../claude/agent.timeline-assembly.test.ts    | 321 ++++++++++++++++++
+ .../server/agent/providers/claude/agent.ts    |  28 +-
+ 2 files changed, 341 insertions(+), 8 deletions(-)
+ create mode 100644 packages/server/src/server/agent/providers/claude/agent.timeline-assembly.test.ts
+
+diff --git a/packages/server/src/server/agent/providers/claude/agent.timeline-assembly.test.ts b/packages/server/src/server/agent/providers/claude/agent.timeline-assembly.test.ts
+new file mode 100644
+index 000000000..281f380f1
+--- /dev/null
++++ b/packages/server/src/server/agent/providers/claude/agent.timeline-assembly.test.ts
+@@ -0,0 +1,321 @@
++import { afterEach, describe, expect, test, vi } from "vitest";
++
++import { createTestLogger } from "../../../../test-utils/test-logger.js";
++import { ClaudeAgentClient } from "./agent.js";
++import { streamSession } from "../test-utils/session-stream-adapter.js";
++import type { AgentSession, AgentStreamEvent } from "../../agent-sdk-types.js";
++
++const MESSAGE_ID = "msg-assembly-1";
++
++type SdkEvent = Record<string, unknown>;
++
++function buildQueryMock(turnEvents: SdkEvent[]) {
++  const events: SdkEvent[] = [
++    {
++      type: "system",
++      subtype: "init",
++      session_id: "assembly-session",
++      permissionMode: "default",
++      model: "opus",
++    },
++    ...turnEvents,
++    {
++      type: "result",
++      subtype: "success",
++      usage: { input_tokens: 1, cache_read_input_tokens: 0, output_tokens: 1 },
++      total_cost_usd: 0,
++    },
++  ];
++  let index = 0;
++  return {
++    next: vi.fn(async () => {
++      if (index >= events.length) {
++        return { done: true, value: undefined };
++      }
++      const value = events[index];
++      index += 1;
++      return { done: false, value };
++    }),
++    interrupt: vi.fn(async () => undefined),
++    return: vi.fn(async () => undefined),
++    close: vi.fn(() => undefined),
++    setPermissionMode: vi.fn(async () => undefined),
++    setModel: vi.fn(async () => undefined),
++    getContextUsage: vi.fn(async () => undefined),
++    supportedModels: vi.fn(async () => [{ value: "opus", displayName: "Opus" }]),
++    supportedCommands: vi.fn(async () => []),
++    rewindFiles: vi.fn(async () => ({ canRewind: true })),
++    [Symbol.asyncIterator]() {
++      return this;
++    },
++  };
++}
++
++async function createSession(turnEvents: SdkEvent[]): Promise<AgentSession> {
++  const client = new ClaudeAgentClient({
++    logger: createTestLogger(),
++    queryFactory: vi.fn(() => buildQueryMock(turnEvents)),
++    resolveBinary: async () => "/test/claude/bin",
++  });
++  return client.createSession({ provider: "claude", cwd: process.cwd() });
++}
++
++function streamEvent(event: Record<string, unknown>): SdkEvent {
++  return { type: "stream_event", event };
++}
++
++function messageStart(): SdkEvent {
++  return streamEvent({
++    type: "message_start",
++    message: { id: MESSAGE_ID, role: "assistant", model: "opus" },
++  });
++}
++
++function messageStop(): SdkEvent {
++  return streamEvent({ type: "message_stop" });
++}
++
++function thinkingDelta(thinking: string): SdkEvent {
++  return streamEvent({
++    type: "content_block_delta",
++    delta: { type: "thinking_delta", thinking },
++  });
++}
++
++function textDelta(text: string): SdkEvent {
++  return streamEvent({ type: "content_block_delta", delta: { type: "text_delta", text } });
++}
++
++function thinkingBlock(thinking: string) {
++  return { type: "thinking", thinking, signature: "sig" };
++}
++
++function textBlock(text: string) {
++  return { type: "text", text };
++}
++
++// The Claude Code SDK emits one assistant message per content block, all sharing the
++// API message id.
++function assistantMessage(content: Array<Record<string, unknown>>): SdkEvent {
++  return {
++    type: "assistant",
++    message: { id: MESSAGE_ID, role: "assistant", content },
++    parent_tool_use_id: null,
++  };
++}
++
++interface EmittedText {
++  reasoning: string[];
++  assistant: string[];
++}
++
++async function runTurn(turnEvents: SdkEvent[]): Promise<EmittedText> {
++  const session = await createSession(turnEvents);
++  sessions.push(session);
++  const events: AgentStreamEvent[] = [];
++  for await (const event of streamSession(session, "prompt")) {
++    events.push(event);
++  }
++  const emitted: EmittedText = { reasoning: [], assistant: [] };
++  for (const event of events) {
++    if (event.type !== "timeline") {
++      continue;
++    }
++    if (event.item.type === "reasoning") {
++      emitted.reasoning.push(event.item.text);
++    }
++    if (event.item.type === "assistant_message") {
++      emitted.assistant.push(event.item.text);
++    }
++  }
++  return emitted;
++}
++
++const sessions: AgentSession[] = [];
++
++afterEach(async () => {
++  await Promise.all(sessions.splice(0).map((session) => session.close()));
++});
++
++describe("Claude timeline assembly", () => {
++  test("streams each thinking block once when every block arrives as its own assistant message", async () => {
++    const emitted = await runTurn([
++      messageStart(),
++      thinkingDelta("First thought."),
++      assistantMessage([thinkingBlock("First thought.")]),
++      thinkingDelta("Second thought."),
++      assistantMessage([thinkingBlock("Second thought.")]),
++      messageStop(),
++    ]);
++
++    expect(emitted).toEqual({
++      reasoning: ["First thought.", "Second thought."],
++      assistant: [],
++    });
++  });
++
++  test("streams each text block once when every block arrives as its own assistant message", async () => {
++    const emitted = await runTurn([
++      messageStart(),
++      textDelta("First answer."),
++      assistantMessage([textBlock("First answer.")]),
++      textDelta("Second answer."),
++      assistantMessage([textBlock("Second answer.")]),
++      messageStop(),
++    ]);
++
++    expect(emitted).toEqual({
++      reasoning: [],
++      assistant: ["First answer.", "Second answer."],
++    });
++  });
++
++  test("emits each block once without stream deltas when every block is its own assistant message", async () => {
++    const emitted = await runTurn([
++      assistantMessage([thinkingBlock("First thought.")]),
++      assistantMessage([thinkingBlock("Second thought.")]),
++      assistantMessage([textBlock("First answer.")]),
++      assistantMessage([textBlock("Second answer.")]),
++    ]);
++
++    expect(emitted).toEqual({
++      reasoning: ["First thought.", "Second thought."],
++      assistant: ["First answer.", "Second answer."],
++    });
++  });
++
++  test("emits a cumulative assistant message once without stream deltas", async () => {
++    const emitted = await runTurn([
++      assistantMessage([
++        thinkingBlock("First thought."),
++        thinkingBlock("Second thought."),
++        textBlock("First answer."),
++        textBlock("Second answer."),
++      ]),
++    ]);
++
++    expect(emitted).toEqual({
++      reasoning: ["First thought.Second thought."],
++      assistant: ["First answer.Second answer."],
++    });
++  });
++
++  test("does not repeat streamed content when a cumulative assistant message follows", async () => {
++    const emitted = await runTurn([
++      messageStart(),
++      thinkingDelta("First thought."),
++      thinkingDelta("Second thought."),
++      textDelta("Answer."),
++      assistantMessage([
++        thinkingBlock("First thought."),
++        thinkingBlock("Second thought."),
++        textBlock("Answer."),
++      ]),
++      messageStop(),
++    ]);
++
++    expect(emitted).toEqual({
++      reasoning: ["First thought.", "Second thought."],
++      assistant: ["Answer."],
++    });
++  });
++
++  test("emits only the unstreamed tail of a cumulative assistant message", async () => {
++    const emitted = await runTurn([
++      messageStart(),
++      textDelta("Partial "),
++      assistantMessage([textBlock("Partial answer.")]),
++      messageStop(),
++    ]);
++
++    expect(emitted).toEqual({ reasoning: [], assistant: ["Partial ", "answer."] });
++  });
++
++  test("does not repeat per-block messages when a cumulative assistant message follows", async () => {
++    const emitted = await runTurn([
++      messageStart(),
++      thinkingDelta("First thought."),
++      assistantMessage([thinkingBlock("First thought.")]),
++      thinkingDelta("Second thought."),
++      assistantMessage([thinkingBlock("Second thought.")]),
++      assistantMessage([thinkingBlock("First thought."), thinkingBlock("Second thought.")]),
++      messageStop(),
++    ]);
++
++    expect(emitted).toEqual({
++      reasoning: ["First thought.", "Second thought."],
++      assistant: [],
++    });
++  });
++
++  test("keeps thinking and text channels independent in a mixed message", async () => {
++    const emitted = await runTurn([
++      messageStart(),
++      thinkingDelta("First thought."),
++      assistantMessage([thinkingBlock("First thought.")]),
++      thinkingDelta("Second thought."),
++      assistantMessage([thinkingBlock("Second thought.")]),
++      textDelta("First answer."),
++      assistantMessage([textBlock("First answer.")]),
++      thinkingDelta("Third thought."),
++      assistantMessage([thinkingBlock("Third thought.")]),
++      textDelta("Second answer."),
++      assistantMessage([textBlock("Second answer.")]),
++      messageStop(),
++    ]);
++
++    expect(emitted).toEqual({
++      reasoning: ["First thought.", "Second thought.", "Third thought."],
++      assistant: ["First answer.", "Second answer."],
++    });
++  });
++
++  test("shows identical consecutive blocks twice when they are streamed", async () => {
++    const emitted = await runTurn([
++      messageStart(),
++      thinkingDelta("Same thought."),
++      assistantMessage([thinkingBlock("Same thought.")]),
++      thinkingDelta("Same thought."),
++      assistantMessage([thinkingBlock("Same thought.")]),
++      textDelta("Done."),
++      assistantMessage([textBlock("Done.")]),
++      textDelta("Done."),
++      assistantMessage([textBlock("Done.")]),
++      messageStop(),
++    ]);
++
++    expect(emitted).toEqual({
++      reasoning: ["Same thought.", "Same thought."],
++      assistant: ["Done.", "Done."],
++    });
++  });
++
++  // Without stream deltas a repeated block carries the same data as a re-delivered
++  // snapshot, so the assembler keeps one copy rather than risk duplicating output.
++  test("shows identical consecutive blocks once when they are not streamed", async () => {
++    const emitted = await runTurn([
++      assistantMessage([thinkingBlock("Same thought.")]),
++      assistantMessage([thinkingBlock("Same thought.")]),
++      assistantMessage([textBlock("Done.")]),
++      assistantMessage([textBlock("Done.")]),
++    ]);
++
++    expect(emitted).toEqual({
++      reasoning: ["Same thought."],
++      assistant: ["Done."],
++    });
++  });
++
++  test("shows a non-streamed block that repeats an earlier, non-adjacent block", async () => {
++    const emitted = await runTurn([
++      assistantMessage([textBlock("Done.")]),
++      assistantMessage([textBlock("Checking again.")]),
++      assistantMessage([textBlock("Done.")]),
++    ]);
++
++    expect(emitted).toEqual({
++      reasoning: [],
++      assistant: ["Done.", "Checking again.", "Done."],
++    });
++  });
++});
+diff --git a/packages/server/src/server/agent/providers/claude/agent.ts b/packages/server/src/server/agent/providers/claude/agent.ts
+index c2f607665..9049a3a5c 100644
+--- a/packages/server/src/server/agent/providers/claude/agent.ts
++++ b/packages/server/src/server/agent/providers/claude/agent.ts
+@@ -1199,6 +1199,24 @@ interface TimelineMessageState {
+   stopped: boolean;
+ }
+ 
++// An assistant message carries either a cumulative snapshot of the API message or, as the
++// Claude Code SDK does, a single content block that shares the message id with its siblings.
++// The merged text always extends `accumulated`, so already-emitted text is never re-emitted.
++//
++// A block identical to the accumulated tail is treated as already streamed. With partial
++// messages on (always, in production) the stream deltas carry every block, so two identical
++// blocks are both shown. Without stream deltas, a block that matches the end of the text
++// before it cannot be told apart from a re-delivered snapshot and is not shown again.
++function mergeAbsoluteText(accumulated: string, incoming: string): string {
++  if (incoming.startsWith(accumulated)) {
++    return incoming;
++  }
++  if (accumulated.endsWith(incoming)) {
++    return accumulated;
++  }
++  return accumulated + incoming;
++}
++
+ class TimelineAssembler {
+   private readonly messages = new Map<string, TimelineMessageState>();
+   private readonly finalizedMessageIds = new Set<string>();
+@@ -1333,16 +1351,10 @@ class TimelineAssembler {
+       .join("");
+ 
+     if (assistantText.length > 0) {
+-      if (!assistantText.startsWith(state.assistantText)) {
+-        state.emittedAssistantLength = 0;
+-      }
+-      state.assistantText = assistantText;
++      state.assistantText = mergeAbsoluteText(state.assistantText, assistantText);
+     }
+     if (reasoningText.length > 0) {
+-      if (!reasoningText.startsWith(state.reasoningText)) {
+-        state.emittedReasoningLength = 0;
+-      }
+-      state.reasoningText = reasoningText;
++      state.reasoningText = mergeAbsoluteText(state.reasoningText, reasoningText);
+     }
+     return this.emitNewContent(state);
+   }
+-- 
+2.50.1 (Apple Git-155)
+
