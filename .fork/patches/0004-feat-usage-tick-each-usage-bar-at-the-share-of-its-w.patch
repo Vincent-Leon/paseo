@@ -1,0 +1,1102 @@
+From adcd7fceba4476d8c65ce932d3f93ae0d8b4d9e9 Mon Sep 17 00:00:00 2001
+From: Vincent Leon <leon@mbp.com>
+Date: Thu, 22 Oct 2026 15:03:59 +0800
+Subject: [PATCH 4/4] feat(usage): tick each usage bar at the share of its
+ window that has elapsed
+
+Usage windows carried how much was used and when they reset, but not how
+long they are, so nothing could say how far through a window you are.
+Add an optional durationSeconds to usage windows and balances, and have the
+sources fill it from what the provider establishes: the reported seconds
+(Codex, Muse, Kimi), named five-hour and weekly fields (Claude, Grok,
+OpenCode Go, Muse), or a reported start and end (MiniMax intervals,
+Cursor billing cycles). Calendar months and unreported lengths stay
+without one.
+
+The app draws an orange tick on every usage bar where the window can be
+placed: cards, balance rows and the sidebar summary. The tick follows the
+used/remaining preference, elapsed time beside used and time left beside
+remaining, so a fill running past the tick is usage outpacing the clock.
+A kept report whose reset has passed gets no tick.
+
+Protocol: the field is optional. Older apps keep parsing (generated
+validators pass unknown keys); older daemons omit it and the bars show no
+tick.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ packages/app/src/usage/balance-bar.tsx        | 54 +++---------------
+ packages/app/src/usage/bars.browser.test.tsx  | 57 +++++++++++++++++++
+ packages/app/src/usage/meter.tsx              | 22 ++++++-
+ packages/app/src/usage/model.test.ts          | 39 +++++++++++++
+ packages/app/src/usage/model.ts               | 33 +++++++++++
+ packages/app/src/usage/pinned.test.ts         | 25 ++++++++
+ packages/app/src/usage/pinned.ts              |  7 ++-
+ packages/app/src/usage/sidebar-item.tsx       | 14 ++++-
+ packages/app/src/usage/window-bar.tsx         |  7 ++-
+ packages/plugin/src/server/usage.test.ts      | 38 +++++++++++++
+ packages/plugin/src/server/usage.ts           | 46 +++++++++++++--
+ packages/protocol/src/messages.ts             |  8 +++
+ .../plugins/usage-sources/index.test.ts       | 37 ++++++++++++
+ plugins/claude-usage-source/server/usage.ts   | 24 +++++++-
+ plugins/cursor-usage-source/server/usage.ts   |  3 +
+ plugins/grok-usage-source/server/usage.ts     |  9 ++-
+ plugins/kimi-usage-source/server/usage.ts     | 45 ++++++++++++---
+ plugins/minimax-usage-source/server/usage.ts  |  3 +
+ plugins/muse-provider/server/usage.ts         |  2 +
+ .../opencode-go-usage-source/server/usage.ts  | 11 ++--
+ public-docs/plugins/reference.md              | 11 +++-
+ 21 files changed, 420 insertions(+), 75 deletions(-)
+
+diff --git a/packages/app/src/usage/balance-bar.tsx b/packages/app/src/usage/balance-bar.tsx
+index def723c55..0a8360a7e 100644
+--- a/packages/app/src/usage/balance-bar.tsx
++++ b/packages/app/src/usage/balance-bar.tsx
+@@ -1,10 +1,11 @@
+-import { useMemo } from "react";
+ import type { TFunction } from "i18next";
+ import { useTranslation } from "react-i18next";
+-import { Text, View, type StyleProp, type ViewStyle } from "react-native";
++import { Text, View } from "react-native";
+ import { StyleSheet } from "react-native-unistyles";
+-import { clampPct, formatAmount, formatProviderUsageLabel, formatResetLabel } from "./format";
+-import type { UsageBalance, UsageTone } from "./types";
++import { formatAmount, formatProviderUsageLabel, formatResetLabel } from "./format";
++import { UsageMeter } from "./meter";
++import { elapsedPercent } from "./model";
++import type { UsageBalance } from "./types";
+ import { useRelativeTimeTick } from "./use-relative-time-tick";
+ 
+ interface ResolvedBalance {
+@@ -41,19 +42,6 @@ function resolveBalance({
+   return { amountText: "—", usedPct: null };
+ }
+ 
+-function fillToneStyle(tone: UsageTone) {
+-  switch (tone) {
+-    case "ok":
+-      return styles.fillOk;
+-    case "warning":
+-      return styles.fillWarning;
+-    case "danger":
+-      return styles.fillDanger;
+-    default:
+-      return styles.fillDefault;
+-  }
+-}
+-
+ export function UsageBalanceBar({
+   balance,
+   retained = false,
+@@ -67,11 +55,6 @@ export function UsageBalanceBar({
+   const tone = balance.tone ?? "default";
+   const resetLabel = formatResetLabel(balance.resetsAt, retained, now, t);
+ 
+-  const fillStyle = useMemo<StyleProp<ViewStyle>>(
+-    () => [styles.fill, fillToneStyle(tone), { width: `${clampPct(usedPct ?? 0)}%` }],
+-    [usedPct, tone],
+-  );
+-
+   return (
+     <View style={styles.container}>
+       <View style={styles.labelRow}>
+@@ -89,10 +72,9 @@ export function UsageBalanceBar({
+           ) : null}
+         </View>
+       </View>
++      {/* A balance bar always shows what is used, so its tick is the time elapsed. */}
+       {usedPct != null ? (
+-        <View style={styles.track}>
+-          <View style={fillStyle} />
+-        </View>
++        <UsageMeter percent={usedPct} tone={tone} marker={elapsedPercent(balance, now)} />
+       ) : null}
+     </View>
+   );
+@@ -128,26 +110,4 @@ const styles = StyleSheet.create((theme) => ({
+     fontWeight: theme.fontWeight.normal,
+     textAlign: "right",
+   },
+-  track: {
+-    height: 4,
+-    borderRadius: 2,
+-    backgroundColor: theme.colors.surface3,
+-    overflow: "hidden",
+-  },
+-  fill: {
+-    height: 4,
+-    borderRadius: 2,
+-  },
+-  fillDefault: {
+-    backgroundColor: theme.colors.foregroundMuted,
+-  },
+-  fillOk: {
+-    backgroundColor: theme.colors.statusSuccess,
+-  },
+-  fillWarning: {
+-    backgroundColor: theme.colors.statusWarning,
+-  },
+-  fillDanger: {
+-    backgroundColor: theme.colors.statusDanger,
+-  },
+ }));
+diff --git a/packages/app/src/usage/bars.browser.test.tsx b/packages/app/src/usage/bars.browser.test.tsx
+index 7b978f7ce..09afedddb 100644
+--- a/packages/app/src/usage/bars.browser.test.tsx
++++ b/packages/app/src/usage/bars.browser.test.tsx
+@@ -8,6 +8,14 @@ import { UsageBalanceBar } from "./balance-bar";
+ 
+ const window: UsageWindow = { id: "session", label: "Session", usedPct: 70 };
+ const balance: UsageBalance = { id: "credits", label: "Credits", unit: "usd", remaining: 12 };
++const placedWindow: UsageWindow = {
++  id: "five_hour",
++  label: "Session",
++  usedPct: 70,
++  resetsAt: "2026-10-22T15:00:00.000Z",
++  durationSeconds: 18_000,
++};
++const unplacedWindow: UsageWindow = { ...window, resetsAt: "2099-01-01T00:00:00.000Z" };
+ const ignorePin = () => {};
+ 
+ let root: Root;
+@@ -51,3 +59,52 @@ it("translates mounted usage rows when the language changes", async () => {
+   expect(container.textContent).toContain("セッション70% 使用済み");
+   expect(container.textContent).toContain("クレジット");
+ });
++
++function timeMarker(): HTMLElement | null {
++  return container.querySelector('[data-testid="usage-meter-time-marker"]');
++}
++
++it("ticks the bar at the share of the window that has elapsed", () => {
++  vi.useFakeTimers({ toFake: ["Date"] });
++  vi.setSystemTime(Date.parse("2026-10-22T12:00:00.000Z"));
++  try {
++    const renderBar = (displayAs: "used" | "remaining") =>
++      act(() =>
++        root.render(
++          <UsageWindowBar
++            window={placedWindow}
++            displayAs={displayAs}
++            pinnable={false}
++            pinned={false}
++            onTogglePin={ignorePin}
++            pinLabel=""
++            pinTestID=""
++          />,
++        ),
++      );
++
++    renderBar("used");
++    expect(timeMarker()?.style.left).toBe("40%");
++    renderBar("remaining");
++    expect(timeMarker()?.style.left).toBe("60%");
++  } finally {
++    vi.useRealTimers();
++  }
++});
++
++it("draws no tick for a window that reports no length", () => {
++  act(() =>
++    root.render(
++      <UsageWindowBar
++        window={unplacedWindow}
++        displayAs="used"
++        pinnable={false}
++        pinned={false}
++        onTogglePin={ignorePin}
++        pinLabel=""
++        pinTestID=""
++      />,
++    ),
++  );
++  expect(timeMarker()).toBeNull();
++});
+diff --git a/packages/app/src/usage/meter.tsx b/packages/app/src/usage/meter.tsx
+index 37842cafb..4a57b1f09 100644
+--- a/packages/app/src/usage/meter.tsx
++++ b/packages/app/src/usage/meter.tsx
+@@ -20,16 +20,21 @@ function fillToneStyle(tone: UsageTone) {
+ /**
+  * A window's share as a bar, coloured by its tone. `quiet` fills it with a surface colour instead,
+  * for summaries where a row of coloured bars would be noise. The caller sizes the track.
++ *
++ * `marker` ticks the bar at how much of the window's time has passed, on the same scale as
++ * `percent`, so a fill running ahead of the tick is usage outpacing the clock.
+  */
+ export function UsageMeter({
+   percent,
+   tone,
+   quiet = false,
++  marker = null,
+   style,
+ }: {
+   percent: number;
+   tone: UsageTone;
+   quiet?: boolean;
++  marker?: number | null;
+   style?: StyleProp<ViewStyle>;
+ }) {
+   const fillWidth = clampPct(percent);
+@@ -37,9 +42,14 @@ export function UsageMeter({
+     () => [styles.fill, quiet ? styles.fillQuiet : fillToneStyle(tone), { width: `${fillWidth}%` }],
+     [fillWidth, quiet, tone],
+   );
++  const markerStyle = useMemo<StyleProp<ViewStyle>>(
++    () => (marker === null ? null : [styles.marker, { left: `${clampPct(marker)}%` }]),
++    [marker],
++  );
+   return (
+     <View style={[styles.track, style]}>
+       <View style={fillStyle} />
++      {markerStyle === null ? null : <View style={markerStyle} testID="usage-meter-time-marker" />}
+     </View>
+   );
+ }
+@@ -49,7 +59,6 @@ const styles = StyleSheet.create((theme) => ({
+     height: 4,
+     borderRadius: 2,
+     backgroundColor: theme.colors.surface3,
+-    overflow: "hidden",
+   },
+   // Follows the track, so a caller that sizes the track sizes the bar.
+   fill: {
+@@ -71,4 +80,15 @@ const styles = StyleSheet.create((theme) => ({
+   fillDanger: {
+     backgroundColor: theme.colors.statusDanger,
+   },
++  // Orange from the palette rather than a status token: the status tokens already colour the fill
++  // by how much is used, and a warning-toned tick would vanish into a warning-toned fill.
++  marker: {
++    position: "absolute",
++    top: -theme.spacing[0.5],
++    bottom: -theme.spacing[0.5],
++    width: 2,
++    marginLeft: -1,
++    borderRadius: 1,
++    backgroundColor: theme.colors.palette.orange[500],
++  },
+ }));
+diff --git a/packages/app/src/usage/model.test.ts b/packages/app/src/usage/model.test.ts
+index a278d6698..a33169b30 100644
+--- a/packages/app/src/usage/model.test.ts
++++ b/packages/app/src/usage/model.test.ts
+@@ -2,7 +2,9 @@ import { afterEach, describe, expect, it } from "vitest";
+ import { i18n } from "@/i18n/i18next";
+ import {
+   resolveUsageReport,
++  displayElapsedPercent,
+   displayPercent,
++  elapsedPercent,
+   resolveAgentUsageView,
+   replaceReport,
+   resolveUsageRefresh,
+@@ -201,6 +203,43 @@ describe("displayPercent", () => {
+   });
+ });
+ 
++describe("elapsedPercent", () => {
++  const resetsAt = "2026-10-22T15:00:00.000Z";
++  const fiveHours = { resetsAt, durationSeconds: 18_000 };
++
++  it("places now within a window that knows its length", () => {
++    // Two of five hours gone: the window started at 10:00.
++    expect(elapsedPercent(fiveHours, Date.parse("2026-10-22T12:00:00.000Z"))).toBe(40);
++  });
++
++  it("cannot place a window without a reset time or a length", () => {
++    const now = Date.parse("2026-10-22T12:00:00.000Z");
++    expect(elapsedPercent({ resetsAt, durationSeconds: null }, now)).toBeNull();
++    expect(elapsedPercent({ resetsAt }, now)).toBeNull();
++    expect(elapsedPercent({ resetsAt: null, durationSeconds: 18_000 }, now)).toBeNull();
++    expect(elapsedPercent({ resetsAt: "not a date", durationSeconds: 18_000 }, now)).toBeNull();
++  });
++
++  it("stops placing a window once it has reset, so a kept report never claims a full window", () => {
++    expect(elapsedPercent(fiveHours, Date.parse(resetsAt))).toBeNull();
++    expect(elapsedPercent(fiveHours, Date.parse("2026-10-22T16:00:00.000Z"))).toBeNull();
++  });
++
++  it("does not place a window that has not started yet", () => {
++    expect(elapsedPercent(fiveHours, Date.parse("2026-10-22T09:00:00.000Z"))).toBeNull();
++  });
++});
++
++describe("displayElapsedPercent", () => {
++  const window = { resetsAt: "2026-10-22T15:00:00.000Z", durationSeconds: 18_000 };
++  const now = Date.parse("2026-10-22T12:00:00.000Z");
++
++  it("pairs elapsed time with used and remaining time with remaining", () => {
++    expect(displayElapsedPercent(window, "used", now)).toBe(40);
++    expect(displayElapsedPercent(window, "remaining", now)).toBe(60);
++  });
++});
++
+ describe("resolveUsageRefresh", () => {
+   it("is pending while a refresh runs, even after an earlier failure", () => {
+     expect(resolveUsageRefresh({ isPending: true, error: new Error("boom") })).toBe("pending");
+diff --git a/packages/app/src/usage/model.ts b/packages/app/src/usage/model.ts
+index 48143ad23..6dfc3af34 100644
+--- a/packages/app/src/usage/model.ts
++++ b/packages/app/src/usage/model.ts
+@@ -18,6 +18,39 @@ export function displayPercent(window: UsageWindow, displayAs: UsageDisplayAs):
+   return used == null ? null : 100 - used;
+ }
+ 
++/** The part of a window or balance that places it in time. */
++export type UsagePeriod = Pick<UsageWindow, "resetsAt" | "durationSeconds">;
++
++/**
++ * How far `now` is through the period, 0–100, or null when the period cannot be placed: it reports
++ * no length or reset, or `now` is outside it. A kept report whose reset has passed belongs to a
++ * window that already rolled over, so it gets no position rather than a full one.
++ */
++export function elapsedPercent(period: UsagePeriod, now: number): number | null {
++  const { resetsAt, durationSeconds } = period;
++  if (resetsAt == null || durationSeconds == null || durationSeconds <= 0) return null;
++  const end = Date.parse(resetsAt);
++  if (Number.isNaN(end)) return null;
++  const length = durationSeconds * 1000;
++  const elapsed = now - (end - length);
++  if (elapsed < 0 || now >= end) return null;
++  return (elapsed / length) * 100;
++}
++
++/**
++ * The elapsed-time position beside the percent a window shows: elapsed time next to used, time
++ * left next to remaining, so the marker and the fill always measure the same thing.
++ */
++export function displayElapsedPercent(
++  period: UsagePeriod,
++  displayAs: UsageDisplayAs,
++  now: number,
++): number | null {
++  const elapsed = elapsedPercent(period, now);
++  if (elapsed === null || displayAs === "used") return elapsed;
++  return 100 - elapsed;
++}
++
+ /**
+  * A window row's accessible label: what pinning it pins, then what the row shows. The row is a
+  * checkbox, so its checked state says whether it is pinned: "Pin Claude Session, 31% · resets in
+diff --git a/packages/app/src/usage/pinned.test.ts b/packages/app/src/usage/pinned.test.ts
+index 410b81575..d7e175b46 100644
+--- a/packages/app/src/usage/pinned.test.ts
++++ b/packages/app/src/usage/pinned.test.ts
+@@ -147,6 +147,7 @@ describe("resolvePinnedUsage", () => {
+           percent: 31,
+           percentText: "31%",
+           tone: "default",
++          marker: null,
+         },
+         {
+           key: "claude:default/weekly",
+@@ -155,6 +156,7 @@ describe("resolvePinnedUsage", () => {
+           percent: 80,
+           percentText: "80%",
+           tone: "warning",
++          marker: null,
+         },
+       ],
+     });
+@@ -214,6 +216,29 @@ describe("resolvePinnedUsage", () => {
+     ]);
+   });
+ 
++  it("marks how much of a window has elapsed, measured the same way as the percent", () => {
++    const placed = report({
++      sourceId: "claude",
++      sourceLabel: "Claude",
++      windows: [
++        {
++          id: "five-hour",
++          label: "Session",
++          usedPct: 31,
++          resetsAt: "2026-10-22T15:00:00.000Z",
++          durationSeconds: 18_000,
++        },
++      ],
++    });
++    const now = Date.parse("2026-10-22T12:00:00.000Z");
++    const pins = [{ sourceId: "claude", windowId: "five-hour" }];
++    const markerFor = (displayAs: UsagePreferences["displayAs"]) =>
++      resolvePinnedUsage([placed], preferences(pins, displayAs), { now })[0].windows[0].marker;
++
++    expect(markerFor("used")).toBe(40);
++    expect(markerFor("remaining")).toBe(60);
++  });
++
+   it("leaves out a pinned window that no report has, or that reports no percent", () => {
+     const noPercent = report({
+       sourceId: "opencode",
+diff --git a/packages/app/src/usage/pinned.ts b/packages/app/src/usage/pinned.ts
+index 21fd4cf06..65a7f8744 100644
+--- a/packages/app/src/usage/pinned.ts
++++ b/packages/app/src/usage/pinned.ts
+@@ -1,7 +1,7 @@
+ import type { TFunction } from "i18next";
+ import { i18n } from "@/i18n/i18next";
+ import { formatPct, formatDisplayPct, formatProviderUsageLabel } from "./format";
+-import { displayPercent } from "./model";
++import { displayElapsedPercent, displayPercent } from "./model";
+ import { effectiveUsagePins, type UsagePreferences } from "./preferences";
+ import { windowTone } from "./tone";
+ import type { UsageReportEntry, UsageTone } from "./types";
+@@ -17,6 +17,8 @@ export interface PinnedUsageWindow {
+   percent: number;
+   percentText: string;
+   tone: UsageTone;
++  /** How much of the window has elapsed, measured like `percent`; null when it can't be placed. */
++  marker: number | null;
+ }
+ 
+ /** One account's summary windows, under its source's icon. */
+@@ -70,7 +72,7 @@ function groupBySource(reports: readonly UsageReportEntry[]): UsageReportEntry[]
+ export function resolvePinnedUsage(
+   reports: readonly UsageReportEntry[],
+   preferences: UsagePreferences,
+-  t: TFunction = i18n.t,
++  { t = i18n.t, now = Date.now() }: { t?: TFunction; now?: number } = {},
+ ): PinnedUsageSource[] {
+   const pins = effectiveUsagePins(preferences, reports);
+   return groupBySource(reports).flatMap((entry) => {
+@@ -91,6 +93,7 @@ export function resolvePinnedUsage(
+           percent,
+           percentText,
+           tone: windowTone(window),
++          marker: displayElapsedPercent(window, preferences.displayAs, now),
+         };
+       });
+     if (windows.length === 0) return [];
+diff --git a/packages/app/src/usage/sidebar-item.tsx b/packages/app/src/usage/sidebar-item.tsx
+index 45a8a8b29..2e1f56277 100644
+--- a/packages/app/src/usage/sidebar-item.tsx
++++ b/packages/app/src/usage/sidebar-item.tsx
+@@ -22,6 +22,7 @@ import { useUsageHostId } from "./hosts";
+ import { useUsageHostReports } from "./queries";
+ import { UsageSourceIcon } from "./source-icon";
+ import { UsageMeter } from "./meter";
++import { useRelativeTimeTick } from "./use-relative-time-tick";
+ import {
+   choosePinnedUsageLayout,
+   METER_GAP,
+@@ -37,7 +38,17 @@ function useUsageSummary(): readonly PinnedUsageSource[] {
+   const { t } = useTranslation();
+   const { preferences } = useUsagePreferences();
+   const reports = useUsageHostReports(useUsageHostId());
+-  return useMemo(() => resolvePinnedUsage(reports, preferences, t), [preferences, reports, t]);
++  // The elapsed-time ticks move with the clock, but only windows that know their length have one.
++  const placesWindows = reports.some(
++    (entry) =>
++      entry.report.status === "available" &&
++      entry.report.windows.some((window) => window.durationSeconds != null),
++  );
++  const now = useRelativeTimeTick({ enabled: placesWindows });
++  return useMemo(
++    () => resolvePinnedUsage(reports, preferences, { t, now }),
++    [preferences, reports, t, now],
++  );
+ }
+ 
+ /** Whether the sidebar Usage item has anything to show. */
+@@ -196,6 +207,7 @@ function PinnedUsageLine({
+                   percent={window.percent}
+                   tone={window.tone}
+                   quiet
++                  marker={window.marker}
+                   style={styles.meter}
+                 />
+               </View>
+diff --git a/packages/app/src/usage/window-bar.tsx b/packages/app/src/usage/window-bar.tsx
+index 99c1eb9f2..74aaaea3e 100644
+--- a/packages/app/src/usage/window-bar.tsx
++++ b/packages/app/src/usage/window-bar.tsx
+@@ -11,7 +11,7 @@ import {
+   formatRunsOutLabel,
+ } from "./format";
+ import { UsageMeter } from "./meter";
+-import { displayPercent, usageWindowRowLabel } from "./model";
++import { displayElapsedPercent, displayPercent, usageWindowRowLabel } from "./model";
+ import type { UsageDisplayAs } from "./preferences";
+ import { windowTone } from "./tone";
+ import type { UsageTone, UsageWindow } from "./types";
+@@ -67,6 +67,7 @@ export function UsageWindowBar({
+     trailing,
+     isAtRisk,
+     percent: shownPct ?? 0,
++    marker: displayElapsedPercent(window, displayAs, now),
+     tone,
+     pinned,
+   };
+@@ -110,6 +111,7 @@ function WindowRowContent({
+   trailing,
+   isAtRisk,
+   percent,
++  marker,
+   tone,
+   pinnable,
+   pinned,
+@@ -120,6 +122,7 @@ function WindowRowContent({
+   trailing: string | null | undefined;
+   isAtRisk: boolean;
+   percent: number;
++  marker: number | null;
+   tone: UsageTone;
+   pinnable: boolean;
+   pinned: boolean;
+@@ -140,7 +143,7 @@ function WindowRowContent({
+               ) : null}
+             </Text>
+           </View>
+-          <UsageMeter percent={percent} tone={tone} />
++          <UsageMeter percent={percent} tone={tone} marker={marker} />
+         </View>
+         {pinnable ? <UsagePinGlyph pinned={pinned} /> : null}
+       </View>
+diff --git a/packages/plugin/src/server/usage.test.ts b/packages/plugin/src/server/usage.test.ts
+index b70e8d6d0..4b1a8c66a 100644
+--- a/packages/plugin/src/server/usage.test.ts
++++ b/packages/plugin/src/server/usage.test.ts
+@@ -1,6 +1,7 @@
+ import { describe, expect, it, test } from "vitest";
+ import {
+   balanceToneFromRemaining,
++  durationBetween,
+   toneFromUsedPct,
+   usedPctOf,
+   windowFromUsedPct,
+@@ -105,3 +106,40 @@ test.each([
+     ).toMatchObject({ id, label, shortLabel, usedPct: 11 });
+   },
+ );
++
++describe("window length", () => {
++  it("carries a reported duration so the app can place the window", () => {
++    expect(
++      windowFromReportedDuration({
++        durationSeconds: 18000,
++        unknown: { id: "primary", label: "Primary limit", shortLabel: "" },
++        utilizationPct: 40,
++        resetsAt: "2026-10-22T15:00:00.000Z",
++      }),
++    ).toMatchObject({
++      id: "five_hour",
++      durationSeconds: 18000,
++      resetsAt: "2026-10-22T15:00:00.000Z",
++    });
++  });
++
++  it("leaves the length out when the provider reports none", () => {
++    const window = windowFromReportedDuration({
++      durationSeconds: null,
++      unknown: { id: "primary", label: "Primary limit", shortLabel: "" },
++      utilizationPct: 40,
++      resetsAt: "2026-10-22T15:00:00.000Z",
++    });
++    expect("durationSeconds" in window).toBe(false);
++  });
++
++  it("measures a period from its reported start and end", () => {
++    expect(durationBetween("2026-10-01T00:00:00.000Z", "2026-10-31T00:00:00.000Z")).toBe(
++      30 * 86400,
++    );
++    expect(durationBetween(1_760_000_000_000, 1_760_018_000_000)).toBe(18000);
++    expect(durationBetween("2026-10-31T00:00:00.000Z", "2026-10-01T00:00:00.000Z")).toBeNull();
++    expect(durationBetween(null, "2026-10-31T00:00:00.000Z")).toBeNull();
++    expect(durationBetween("not a date", "2026-10-31T00:00:00.000Z")).toBeNull();
++  });
++});
+diff --git a/packages/plugin/src/server/usage.ts b/packages/plugin/src/server/usage.ts
+index fa23ca9c9..2c2f7c883 100644
+--- a/packages/plugin/src/server/usage.ts
++++ b/packages/plugin/src/server/usage.ts
+@@ -15,6 +15,12 @@ export interface UsageWindow {
+   usedPct?: number | null;
+   remainingPct?: number | null;
+   resetsAt?: string | null;
++  /**
++   * The window's length in seconds, as the provider reports it. With `resetsAt` it lets the app
++   * show how much of the window has elapsed. Leave it out when the provider names no length; a
++   * reset countdown is not one.
++   */
++  durationSeconds?: number | null;
+   runsOutAt?: string | null;
+   shortfallPct?: number | null;
+   tone?: "default" | "ok" | "warning" | "danger";
+@@ -28,6 +34,8 @@ export interface UsageBalance {
+   limit?: number | null;
+   unit: "usd" | "credits" | "requests" | "tokens";
+   resetsAt?: string | null;
++  /** The billing period's length in seconds, as for `UsageWindow.durationSeconds`. */
++  durationSeconds?: number | null;
+   tone?: UsageWindow["tone"];
+ }
+ 
+@@ -93,6 +101,7 @@ export function windowFromUsedPct(input: {
+   summary?: boolean;
+   utilizationPct: number | null | undefined;
+   resetsAt?: string | null;
++  durationSeconds?: number | null;
+   tone?: UsageWindow["tone"];
+ }): UsageWindow {
+   const usedPct = typeof input.utilizationPct === "number" ? input.utilizationPct : null;
+@@ -104,6 +113,7 @@ export function windowFromUsedPct(input: {
+     resetsAt: input.resetsAt ?? null,
+   };
+   if (input.shortLabel !== undefined) window.shortLabel = input.shortLabel;
++  if (isWindowLength(input.durationSeconds)) window.durationSeconds = input.durationSeconds;
+   if (input.summary) window.summary = true;
+   if (input.tone) window.tone = input.tone;
+   return window;
+@@ -126,10 +136,7 @@ export function windowFromReportedDuration(input: {
+   tone?: UsageWindow["tone"];
+ }): UsageWindow {
+   const duration = input.durationSeconds;
+-  const name =
+-    duration !== null && Number.isFinite(duration) && duration > 0
+-      ? durationWindowName(duration)
+-      : input.unknown;
++  const name = isWindowLength(duration) ? durationWindowName(duration) : input.unknown;
+   const scope = input.scope;
+   return windowFromUsedPct({
+     id: scope ? `${scope.id}:${name.id}` : name.id,
+@@ -139,14 +146,41 @@ export function windowFromReportedDuration(input: {
+       : name.shortLabel,
+     utilizationPct: input.utilizationPct,
+     resetsAt: input.resetsAt,
++    durationSeconds: duration,
+     summary: input.summary,
+     tone: input.tone,
+   });
+ }
+ 
++/** Seconds in the fixed windows providers name by kind rather than by a reported length. */
++export const USAGE_WINDOW_SECONDS = {
++  fiveHours: 18_000,
++  week: 604_800,
++} as const;
++
++/** A length the app can place a window with: positive and finite. */
++export function isWindowLength(seconds: number | null | undefined): seconds is number {
++  return typeof seconds === "number" && Number.isFinite(seconds) && seconds > 0;
++}
++
++/**
++ * The length between a period's reported start and end, for providers that report both.
++ * Null when either is missing or unparseable, or the end is not after the start.
++ */
++export function durationBetween(
++  start: string | number | null | undefined,
++  end: string | number | null | undefined,
++): number | null {
++  if (start === null || start === undefined || end === null || end === undefined) return null;
++  const seconds = (new Date(end).getTime() - new Date(start).getTime()) / 1000;
++  return isWindowLength(seconds) ? seconds : null;
++}
++
+ function durationWindowName(seconds: number): { id: string; label: string; shortLabel: string } {
+-  if (seconds === 604800) return { id: "weekly", label: "Weekly", shortLabel: "wk" };
+-  const id = seconds === 18000 ? "five_hour" : `${seconds}s`;
++  if (seconds === USAGE_WINDOW_SECONDS.week) {
++    return { id: "weekly", label: "Weekly", shortLabel: "wk" };
++  }
++  const id = seconds === USAGE_WINDOW_SECONDS.fiveHours ? "five_hour" : `${seconds}s`;
+   const units = [
+     [86400, "day", "d"],
+     [3600, "hour", "h"],
+diff --git a/packages/protocol/src/messages.ts b/packages/protocol/src/messages.ts
+index e8df79eab..c56e681d5 100644
+--- a/packages/protocol/src/messages.ts
++++ b/packages/protocol/src/messages.ts
+@@ -6275,6 +6275,12 @@ export const ProviderUsageWindowSchema = z.object({
+   usedPct: z.number().nullable().optional(),
+   remainingPct: z.number().nullable().optional(),
+   resetsAt: z.string().nullable().optional(),
++  /**
++   * The window's length in seconds, as the provider reports it. With `resetsAt` it places the
++   * window's start, so a client can compare elapsed time with usage. Absent when the provider
++   * names no length; a reset countdown is not one.
++   */
++  durationSeconds: z.number().nullable().optional(),
+   runsOutAt: z.string().nullable().optional(),
+   shortfallPct: z.number().nullable().optional(),
+   tone: ProviderUsageToneSchema.optional(),
+@@ -6288,6 +6294,8 @@ export const ProviderUsageBalanceSchema = z.object({
+   limit: z.number().nullable().optional(),
+   unit: z.enum(["usd", "credits", "requests", "tokens"]),
+   resetsAt: z.string().nullable().optional(),
++  /** The billing period's length in seconds, as for `ProviderUsageWindowSchema.durationSeconds`. */
++  durationSeconds: z.number().nullable().optional(),
+   tone: ProviderUsageToneSchema.optional(),
+ });
+ 
+diff --git a/packages/server/src/server/plugins/usage-sources/index.test.ts b/packages/server/src/server/plugins/usage-sources/index.test.ts
+index da9d52eae..ca2c0205f 100644
+--- a/packages/server/src/server/plugins/usage-sources/index.test.ts
++++ b/packages/server/src/server/plugins/usage-sources/index.test.ts
+@@ -103,6 +103,43 @@ test("discovery preserves account IDs and updates input after token rotation", a
+   expect(refreshed[0]?.report.windows[0]?.label).toBe("new");
+ });
+ 
++test("window and balance lengths reach clients, so they can place elapsed time", async () => {
++  const registry = new UsageSourceRegistry();
++  registry.register(
++    source({
++      id: "claude",
++      discover: async () => [{ key: "work", input: {} }],
++      fetch: async () => ({
++        status: "available",
++        windows: [
++          {
++            id: "five_hour",
++            label: "Session",
++            usedPct: 40,
++            resetsAt: "2026-10-22T15:00:00.000Z",
++            durationSeconds: 18_000,
++          },
++        ],
++        balances: [
++          {
++            id: "plan_usage",
++            label: "Plan usage",
++            unit: "usd",
++            used: 1,
++            limit: 10,
++            resetsAt: "2026-10-31T00:00:00.000Z",
++            durationSeconds: 2_592_000,
++          },
++        ],
++      }),
++    }),
++  );
++  const [entry] = await registry.listReports();
++  if (entry?.report.status !== "available") throw new Error("Expected an available report");
++  expect(entry.report.windows[0]?.durationSeconds).toBe(18_000);
++  expect(entry.report.balances?.[0]?.durationSeconds).toBe(2_592_000);
++});
++
+ test("coalesces per account, caches errors, and refreshes only requested IDs", async () => {
+   let now = 0;
+   const counts = new Map<string, number>();
+diff --git a/plugins/claude-usage-source/server/usage.ts b/plugins/claude-usage-source/server/usage.ts
+index 9efade206..de31aaa94 100644
+--- a/plugins/claude-usage-source/server/usage.ts
++++ b/plugins/claude-usage-source/server/usage.ts
+@@ -10,6 +10,7 @@ import {
+   hashAccountKey,
+   toneFromUsedPct,
+   unavailable,
++  USAGE_WINDOW_SECONDS,
+   type UsageAccount,
+   type UsageScope,
+   windowFromUsedPct,
+@@ -119,9 +120,25 @@ const UNSCOPED_WINDOWS: ReadonlyArray<{
+   label: string;
+   shortLabel: string;
+   summary: boolean;
++  /** The API names these windows by length, so the length comes with the field. */
++  durationSeconds: number;
+ }> = [
+-  { field: "five_hour", id: "five_hour", label: "Session", shortLabel: "5h", summary: true },
+-  { field: "seven_day", id: "weekly", label: "Weekly", shortLabel: "wk", summary: true },
++  {
++    field: "five_hour",
++    id: "five_hour",
++    label: "Session",
++    shortLabel: "5h",
++    summary: true,
++    durationSeconds: USAGE_WINDOW_SECONDS.fiveHours,
++  },
++  {
++    field: "seven_day",
++    id: "weekly",
++    label: "Weekly",
++    shortLabel: "wk",
++    summary: true,
++    durationSeconds: USAGE_WINDOW_SECONDS.week,
++  },
+ ];
+ 
+ // Scoped windows from before `limits[]` existed. Declaring the dimension here is what
+@@ -264,6 +281,7 @@ function unscopedWindows(resp: ClaudeUsageResponse): UsageWindow[] {
+         summary: spec.summary,
+         utilizationPct: window.utilization,
+         resetsAt: window.resets_at ?? null,
++        durationSeconds: spec.durationSeconds,
+         tone: toneFromUsedPct(window.utilization),
+       }),
+     );
+@@ -284,6 +302,8 @@ function scopedWindows(limits: ScopedLimit[]): UsageWindow[] {
+       shortLabel: `wk ${limit.name}`,
+       utilizationPct: limit.usedPct,
+       resetsAt: limit.resetsAt,
++      // Both shapes describe weekly limits: `seven_day_<model>` keys and `weekly_scoped` entries.
++      durationSeconds: USAGE_WINDOW_SECONDS.week,
+       tone: toneFromUsedPct(limit.usedPct),
+     });
+   });
+diff --git a/plugins/cursor-usage-source/server/usage.ts b/plugins/cursor-usage-source/server/usage.ts
+index 2265dbb55..220e44a6a 100644
+--- a/plugins/cursor-usage-source/server/usage.ts
++++ b/plugins/cursor-usage-source/server/usage.ts
+@@ -6,6 +6,7 @@ import { homedir } from "node:os";
+ import { join } from "node:path";
+ import { z } from "zod";
+ import {
++  durationBetween,
+   toneFromUsedPct,
+   usedPctOf,
+   unavailable,
+@@ -177,6 +178,7 @@ export async function fetchUsage(
+ 
+   const resp = CursorUsageResponseSchema.parse(await res.json());
+   const billingCycleEnd = parseCursorBillingCycleTimestamp(resp.billingCycleEnd);
++  const billingCycleStart = parseCursorBillingCycleTimestamp(resp.billingCycleStart);
+   const balances: UsageBalance[] = [];
+   if (resp.planUsage) {
+     const totalSpend = centsToDollars(resp.planUsage.totalSpend);
+@@ -190,6 +192,7 @@ export async function fetchUsage(
+       limit,
+       unit: "usd",
+       resetsAt: billingCycleEnd,
++      durationSeconds: durationBetween(billingCycleStart, billingCycleEnd),
+       tone: toneFromUsedPct(usedPctOf(totalSpend, limit)),
+     });
+   }
+diff --git a/plugins/grok-usage-source/server/usage.ts b/plugins/grok-usage-source/server/usage.ts
+index 5a57ca7dd..0378fedf2 100644
+--- a/plugins/grok-usage-source/server/usage.ts
++++ b/plugins/grok-usage-source/server/usage.ts
+@@ -7,6 +7,7 @@ import {
+   toneFromUsedPct,
+   usedPctOf,
+   unavailable,
++  USAGE_WINDOW_SECONDS,
+   type UsageAccount,
+   windowFromUsedPct,
+   type UsageReport,
+@@ -94,8 +95,14 @@ function grokUsageWindow(response: z.infer<typeof GrokUsageResponseSchema>): Usa
+   const percent = response.config?.creditUsagePercent;
+   if (typeof percent !== "number") return null;
+   const period = response.config?.currentPeriod;
++  // A month has no single length and the period reports no start, so only weekly is placed.
+   const names = {
+-    USAGE_PERIOD_TYPE_WEEKLY: { id: "weekly", label: "Weekly", shortLabel: "wk" },
++    USAGE_PERIOD_TYPE_WEEKLY: {
++      id: "weekly",
++      label: "Weekly",
++      shortLabel: "wk",
++      durationSeconds: USAGE_WINDOW_SECONDS.week,
++    },
+     USAGE_PERIOD_TYPE_MONTHLY: { id: "monthly", label: "Monthly", shortLabel: "mo" },
+   };
+   // An absent or unfamiliar enum does not establish a monthly duration.
+diff --git a/plugins/kimi-usage-source/server/usage.ts b/plugins/kimi-usage-source/server/usage.ts
+index 556008990..32d814ede 100644
+--- a/plugins/kimi-usage-source/server/usage.ts
++++ b/plugins/kimi-usage-source/server/usage.ts
+@@ -105,6 +105,21 @@ function durationLabel(duration: number | null, timeUnit: string | undefined): s
+   return null;
+ }
+ 
++const TIME_UNIT_SECONDS: Record<string, number> = {
++  SECOND: 1,
++  MINUTE: 60,
++  HOUR: 3600,
++  DAY: 86400,
++  WEEK: 604800,
++};
++
++/** The reported period in seconds, or null when the unit is missing or unfamiliar. */
++function periodSeconds(duration: number | null, timeUnit: string | undefined): number | null {
++  if (duration === null || !timeUnit) return null;
++  const unitSeconds = TIME_UNIT_SECONDS[timeUnit.replace(/^TIME_UNIT_/i, "").toUpperCase()];
++  return unitSeconds === undefined ? null : duration * unitSeconds;
++}
++
+ function idPart(value: string | number): string {
+   return String(value)
+     .toLowerCase()
+@@ -135,17 +150,28 @@ function windowMetadata(limit: KimiUsageLimit): KimiUsageFields | null {
+   return parseUsageFields(limit.window);
+ }
+ 
+-function limitIdentity(input: {
++interface LimitPeriodInput {
+   metadata: KimiUsageFields | null;
+   fields: KimiUsageFields;
+   window: KimiUsageFields | null;
+-  index: number;
+-}): { id: string; label: string } {
++}
++
++/** A limit's period, read from the most specific place that reports one. */
++function limitPeriod(input: LimitPeriodInput): {
++  duration: number | null;
++  timeUnit: string | undefined;
++} {
++  return {
++    duration: durationFrom(
++      input.window?.duration ?? input.metadata?.duration ?? input.fields.duration,
++    ),
++    timeUnit: input.window?.timeUnit ?? input.metadata?.timeUnit ?? input.fields.timeUnit,
++  };
++}
++
++function limitIdentity(input: LimitPeriodInput & { index: number }): { id: string; label: string } {
+   const label = explicitUsageLabel(input.metadata, input.fields);
+-  const duration = durationFrom(
+-    input.window?.duration ?? input.metadata?.duration ?? input.fields.duration,
+-  );
+-  const timeUnit = input.window?.timeUnit ?? input.metadata?.timeUnit ?? input.fields.timeUnit;
++  const { duration, timeUnit } = limitPeriod(input);
+   const generatedLabel = duration === null ? null : durationLabel(duration, timeUnit);
+ 
+   if (duration !== null && timeUnit) {
+@@ -169,6 +195,7 @@ function windowFromFields(input: {
+   id: string;
+   label: string;
+   fields: KimiUsageFields;
++  durationSeconds: number | null;
+ }): UsageWindow {
+   const usedPct = usedPctFromFields(input.fields);
+   return windowFromUsedPct({
+@@ -176,6 +203,7 @@ function windowFromFields(input: {
+     label: input.label,
+     utilizationPct: usedPct,
+     resetsAt: resetTimeFromFields(input.fields),
++    durationSeconds: input.durationSeconds,
+     tone: toneFromUsedPct(usedPct),
+   });
+ }
+@@ -207,6 +235,7 @@ function kimiUsageWindowsFromPayload(payload: unknown): UsageWindow[] {
+           durationLabel(durationFrom(usage.duration), usage.timeUnit) ??
+           "Usage limit",
+         fields: usage,
++        durationSeconds: periodSeconds(durationFrom(usage.duration), usage.timeUnit),
+       }),
+     );
+   }
+@@ -226,11 +255,13 @@ function kimiUsageWindowsFromPayload(payload: unknown): UsageWindow[] {
+ 
+     const window = windowMetadata(limit);
+     const identity = limitIdentity({ metadata, fields, window, index });
++    const period = limitPeriod({ metadata, fields, window });
+     windows.push(
+       windowFromFields({
+         id: uniqueWindowId(identity.id, seenWindowIds),
+         label: identity.label,
+         fields,
++        durationSeconds: periodSeconds(period.duration, period.timeUnit),
+       }),
+     );
+   }
+diff --git a/plugins/minimax-usage-source/server/usage.ts b/plugins/minimax-usage-source/server/usage.ts
+index 7bf602cff..080d23ac1 100644
+--- a/plugins/minimax-usage-source/server/usage.ts
++++ b/plugins/minimax-usage-source/server/usage.ts
+@@ -4,6 +4,7 @@ import { homedir } from "node:os";
+ import { join } from "node:path";
+ import { z } from "zod";
+ import {
++  durationBetween,
+   unavailable,
+   type UsageAccount,
+   windowFromUsedPct,
+@@ -121,6 +122,7 @@ function toIntervalWindow(modelName: string, model: MiniMaxModelRemain): UsageWi
+     label: `${modelName} · Interval`,
+     utilizationPct: usedPct,
+     resetsAt: epochMsToIso(model.end_time),
++    durationSeconds: durationBetween(model.start_time, model.end_time),
+     tone: toneForStatus(model.current_interval_status),
+   });
+ }
+@@ -141,6 +143,7 @@ function toWeeklyWindow(modelName: string, model: MiniMaxModelRemain): UsageWind
+     label: `${modelName} · Weekly`,
+     utilizationPct: usedPct,
+     resetsAt: epochMsToIso(model.weekly_end_time),
++    durationSeconds: durationBetween(model.weekly_start_time, model.weekly_end_time),
+     tone: toneForStatus(model.current_weekly_status),
+   });
+ }
+diff --git a/plugins/muse-provider/server/usage.ts b/plugins/muse-provider/server/usage.ts
+index e3915c6dd..238b4ef86 100644
+--- a/plugins/muse-provider/server/usage.ts
++++ b/plugins/muse-provider/server/usage.ts
+@@ -6,6 +6,7 @@ import type { ProviderLaunch } from "@getpaseo/plugin/server/provider";
+ import {
+   hashAccountKey,
+   unavailable,
++  USAGE_WINDOW_SECONDS,
+   windowFromUsedPct,
+   windowFromReportedDuration,
+   toneFromUsedPct,
+@@ -105,6 +106,7 @@ export class Usage {
+                 summary: true,
+                 utilizationPct: usage.weekly.usedPercent,
+                 resetsAt: new Date(usage.weekly.resetsAtMs).toISOString(),
++                durationSeconds: USAGE_WINDOW_SECONDS.week,
+                 tone: toneFromUsedPct(usage.weekly.usedPercent),
+               }),
+             ],
+diff --git a/plugins/opencode-go-usage-source/server/usage.ts b/plugins/opencode-go-usage-source/server/usage.ts
+index cd2905ca2..b1693cf2c 100644
+--- a/plugins/opencode-go-usage-source/server/usage.ts
++++ b/plugins/opencode-go-usage-source/server/usage.ts
+@@ -5,6 +5,7 @@ import { z } from "zod";
+ import {
+   hashAccountKey,
+   unavailable,
++  USAGE_WINDOW_SECONDS,
+   type UsageAccount,
+   toneFromUsedPct,
+   windowFromUsedPct,
+@@ -67,17 +68,19 @@ export async function fetchUsage(
+   const windows = (
+     [
+       // The rolling window's length is not reported, so its percent stands without a name.
+-      ["rolling", "Rolling", "", data.usage.rolling],
+-      ["weekly", "Weekly", "wk", data.usage.weekly],
+-      ["monthly", "Monthly", "mo", data.usage.monthly],
++      // A month has no single length, so only the weekly window is placed.
++      ["rolling", "Rolling", "", data.usage.rolling, null],
++      ["weekly", "Weekly", "wk", data.usage.weekly, USAGE_WINDOW_SECONDS.week],
++      ["monthly", "Monthly", "mo", data.usage.monthly, null],
+     ] as const
+-  ).map(([id, label, shortLabel, value]) =>
++  ).map(([id, label, shortLabel, value, durationSeconds]) =>
+     windowFromUsedPct({
+       id,
+       label,
+       shortLabel,
+       utilizationPct: value.percent,
+       resetsAt: value.resetsAt,
++      durationSeconds,
+       tone: toneFromUsedPct(value.percent),
+     }),
+   );
+diff --git a/public-docs/plugins/reference.md b/public-docs/plugins/reference.md
+index e456e625b..b9dd9559b 100644
+--- a/public-docs/plugins/reference.md
++++ b/public-docs/plugins/reference.md
+@@ -516,8 +516,15 @@ do not establish duration. When the provider omits it, use a neutral name such a
+ For numeric durations, use `windowFromReportedDuration()` from
+ `@getpaseo/plugin/server/usage` (Paseo 0.11+). Pass the reported seconds or `null`, a neutral
+ `unknown` identity and name, and an optional stable quota `scope`. The helper derives the ID,
+-label, and short label together; it accepts no duration-label override. For named API periods,
+-use `windowFromUsedPct()` with names justified by that field.
++label, and short label together, and records the seconds as the window's `durationSeconds`; it
++accepts no duration-label override. For named API periods, use `windowFromUsedPct()` with names
++justified by that field.
++
++Set `durationSeconds` on the same evidence as the name: reported seconds, a named period field
++(`USAGE_WINDOW_SECONDS.fiveHours` or `.week`), or a reported start and end through
++`durationBetween()`. With `resetsAt`, the app ticks the bar at the share of the window that has
++elapsed. Leave it out for calendar months, whose length varies, and for unreported lengths. A
++balance takes the same field for its billing period.
+ 
+ A window ID identifies a quota scope and period, never its response position, utilization, or
+ reset instant. Scope model-specific quotas by the provider's stable feature ID, falling back to
+-- 
+2.50.1 (Apple Git-155)
+

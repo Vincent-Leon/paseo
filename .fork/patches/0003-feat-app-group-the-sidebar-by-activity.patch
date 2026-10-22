@@ -1,0 +1,1298 @@
+From 29e4b2d289f6c657c50c452c865a25d54a1440bc Mon Sep 17 00:00:00 2001
+From: Vincent Leon <leon@mbp.com>
+Date: Thu, 22 Oct 2026 14:29:04 +0800
+Subject: [PATCH 3/4] feat(app): group the sidebar by activity
+
+Add an Activity grouping mode next to Project and Status. Live work keeps
+its status buckets at the top: needs input, failed, ready to review and
+working. Below them, workspaces that finished within a chosen window
+(3 hours, 12 hours or today, from local midnight) share one Done group,
+and everything that finished earlier folds into one group per project,
+most recently finished project first.
+
+The window lives with the grouping mode in the sidebar view store and is
+picked from a Done within row that appears in the display menu only in
+activity grouping. The grouping reads the shared minute clock only in this
+mode, so finished work moves out of Done as time passes.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../sidebar/activity-groups.test.ts           | 171 ++++++++++++++++++
+ .../src/components/sidebar/activity-groups.ts |  91 ++++++++++
+ .../sidebar/display-preferences/menu.tsx      |  46 ++++-
+ .../sidebar/display-preferences/model.ts      |   9 +
+ .../src/components/sidebar/sidebar-labels.ts  |   6 +-
+ .../src/components/sidebar/sidebar-model.tsx  |   8 +
+ .../sidebar/sidebar-projection.test.ts        |   8 +-
+ .../components/sidebar/sidebar-projection.ts  |  16 +-
+ .../sidebar/sidebar-status-list.tsx           |  52 +++++-
+ .../src/hooks/sidebar-status-view-model.ts    |   2 +-
+ packages/app/src/i18n/resources/ar.ts         |  14 ++
+ packages/app/src/i18n/resources/en.ts         |  14 ++
+ packages/app/src/i18n/resources/es.ts         |  14 ++
+ packages/app/src/i18n/resources/fr.ts         |  14 ++
+ packages/app/src/i18n/resources/ja.ts         |  14 ++
+ packages/app/src/i18n/resources/ko.ts         |  14 ++
+ packages/app/src/i18n/resources/pt-BR.ts      |  14 ++
+ packages/app/src/i18n/resources/ru.ts         |  14 ++
+ packages/app/src/i18n/resources/zh-CN.ts      |  14 ++
+ .../app/src/stores/sidebar-view-store.test.ts |  26 +++
+ packages/app/src/stores/sidebar-view-store.ts |  25 ++-
+ 21 files changed, 568 insertions(+), 18 deletions(-)
+ create mode 100644 packages/app/src/components/sidebar/activity-groups.test.ts
+ create mode 100644 packages/app/src/components/sidebar/activity-groups.ts
+
+diff --git a/packages/app/src/components/sidebar/activity-groups.test.ts b/packages/app/src/components/sidebar/activity-groups.test.ts
+new file mode 100644
+index 000000000..30e15b1c6
+--- /dev/null
++++ b/packages/app/src/components/sidebar/activity-groups.test.ts
+@@ -0,0 +1,171 @@
++import { i18n } from "@/i18n/i18next";
++import { describe, expect, it } from "vitest";
++import type { SidebarWorkspaceEntry } from "@/hooks/use-sidebar-workspaces-list";
++import { buildActivityGroups } from "./activity-groups";
++
++// Built from local fields so "today" means the same calendar day in every test time zone.
++const NOW = new Date(2026, 9, 22, 10, 0).getTime();
++const HOUR = 3_600_000;
++
++function ws(
++  id: string,
++  options: {
++    bucket?: SidebarWorkspaceEntry["statusBucket"];
++    enteredAt?: number | null;
++    project?: string;
++  } = {},
++): SidebarWorkspaceEntry {
++  const project = options.project ?? "alpha";
++  const enteredAt = options.enteredAt === undefined ? NOW : options.enteredAt;
++  return {
++    workspaceKey: `srv:${id}`,
++    serverId: "srv",
++    workspaceId: id,
++    projectViewKey: project,
++    projectName: project === "alpha" ? "Alpha" : "Beta",
++    projectKind: "git",
++    workspaceKind: "worktree",
++    name: id,
++    workspaceDirectory: "",
++    workspaceDirectoryLabel: "",
++    title: null,
++    currentBranch: null,
++    statusBucket: options.bucket ?? "done",
++    statusEnteredAt: enteredAt === null ? null : new Date(enteredAt),
++    archivingAt: null,
++    diffStat: null,
++    prHint: null,
++    archiveHasUncommittedChanges: null,
++    archiveUnpushedCommitCount: null,
++    scripts: [],
++    hasRunningScripts: false,
++    labels: [],
++  };
++}
++
++function summarize(workspaces: SidebarWorkspaceEntry[], window: "3h" | "12h" | "today") {
++  return buildActivityGroups({
++    workspaces,
++    projectNamesByViewKey: new Map([
++      ["alpha", "Alpha"],
++      ["beta", "Beta"],
++    ]),
++    window,
++    now: NOW,
++    t: i18n.t,
++  }).map((group) => ({
++    key: group.key,
++    label: group.label,
++    leading: group.leading,
++    rows: group.rows.map((row) => row.workspaceId),
++  }));
++}
++
++describe("buildActivityGroups", () => {
++  it("puts live work first, then today's finished work, then older work by project", () => {
++    const groups = summarize(
++      [
++        ws("old-alpha", { enteredAt: NOW - 30 * HOUR }),
++        ws("working", { bucket: "running", enteredAt: NOW - 5 * HOUR }),
++        ws("finished-this-morning", { enteredAt: NOW - 2 * HOUR, project: "beta" }),
++        ws("waiting", { bucket: "needs_input", enteredAt: NOW - HOUR }),
++        ws("old-beta", { enteredAt: NOW - 50 * HOUR, project: "beta" }),
++        ws("unread", { bucket: "attention", enteredAt: NOW - 20 * HOUR }),
++      ],
++      "today",
++    );
++
++    expect(groups).toEqual([
++      {
++        key: "needs_input",
++        label: "Needs input",
++        leading: { kind: "status", bucket: "needs_input" },
++        rows: ["waiting"],
++      },
++      {
++        key: "attention",
++        label: "Ready to review",
++        leading: { kind: "status", bucket: "attention" },
++        rows: ["unread"],
++      },
++      {
++        key: "running",
++        label: "Working",
++        leading: { kind: "status", bucket: "running" },
++        rows: ["working"],
++      },
++      {
++        key: "activity:done",
++        label: "Done today",
++        leading: { kind: "status", bucket: "done" },
++        rows: ["finished-this-morning"],
++      },
++      {
++        key: "activity:project:alpha",
++        label: "Alpha",
++        leading: { kind: "project", projectViewKey: "alpha" },
++        rows: ["old-alpha"],
++      },
++      {
++        key: "activity:project:beta",
++        label: "Beta",
++        leading: { kind: "project", projectViewKey: "beta" },
++        rows: ["old-beta"],
++      },
++    ]);
++  });
++
++  it("starts today at local midnight, so last night's work is already older", () => {
++    const groups = summarize(
++      [
++        ws("just-after-midnight", { enteredAt: new Date(2026, 9, 22, 0, 5).getTime() }),
++        ws("just-before-midnight", { enteredAt: new Date(2026, 9, 21, 23, 55).getTime() }),
++      ],
++      "today",
++    );
++
++    expect(groups.map((group) => [group.key, group.rows])).toEqual([
++      ["activity:done", ["just-after-midnight"]],
++      ["activity:project:alpha", ["just-before-midnight"]],
++    ]);
++  });
++
++  it("keeps a rolling window of the chosen length", () => {
++    const workspaces = [
++      ws("two-hours-ago", { enteredAt: NOW - 2 * HOUR }),
++      ws("five-hours-ago", { enteredAt: NOW - 5 * HOUR }),
++    ];
++
++    expect(summarize(workspaces, "3h").map((group) => [group.label, group.rows])).toEqual([
++      ["Done in the last 3 hours", ["two-hours-ago"]],
++      ["Alpha", ["five-hours-ago"]],
++    ]);
++    expect(summarize(workspaces, "12h").map((group) => [group.label, group.rows])).toEqual([
++      ["Done in the last 12 hours", ["two-hours-ago", "five-hours-ago"]],
++    ]);
++  });
++
++  it("orders older projects by their latest finished workspace, newest first", () => {
++    const groups = summarize(
++      [
++        ws("alpha-old", { enteredAt: NOW - 90 * HOUR }),
++        ws("beta-newer", { enteredAt: NOW - 40 * HOUR, project: "beta" }),
++        ws("alpha-newer", { enteredAt: NOW - 30 * HOUR }),
++      ],
++      "today",
++    );
++
++    expect(groups.map((group) => [group.key, group.rows])).toEqual([
++      ["activity:project:alpha", ["alpha-newer", "alpha-old"]],
++      ["activity:project:beta", ["beta-newer"]],
++    ]);
++  });
++
++  it("treats finished work with no recorded time as older", () => {
++    const groups = summarize([ws("unknown", { enteredAt: null })], "12h");
++
++    expect(groups.map((group) => [group.key, group.rows])).toEqual([
++      ["activity:project:alpha", ["unknown"]],
++    ]);
++  });
++});
+diff --git a/packages/app/src/components/sidebar/activity-groups.ts b/packages/app/src/components/sidebar/activity-groups.ts
+new file mode 100644
+index 000000000..4133d26be
+--- /dev/null
++++ b/packages/app/src/components/sidebar/activity-groups.ts
+@@ -0,0 +1,91 @@
++import type { TFunction } from "i18next";
++import { buildStatusGroups, compareStatusRows } from "@/hooks/sidebar-status-view-model";
++import type { SidebarWorkspaceEntry } from "@/hooks/use-sidebar-workspaces-list";
++import type { SidebarActivityWindow } from "@/stores/sidebar-view-store";
++import { statusWorkspaceGroups, type SidebarWorkspaceGroup } from "./sidebar-labels";
++
++const HOUR_MS = 3_600_000;
++
++const DONE_LABEL_KEYS = {
++  "3h": "sidebar.activity.doneWithin.threeHours",
++  "12h": "sidebar.activity.doneWithin.twelveHours",
++  today: "sidebar.activity.doneWithin.today",
++} as const satisfies Record<SidebarActivityWindow, string>;
++
++export interface ActivityGroupsInput {
++  workspaces: SidebarWorkspaceEntry[];
++  projectNamesByViewKey: Map<string, string>;
++  window: SidebarActivityWindow;
++  now: number;
++  t: TFunction;
++}
++
++/** The earliest finish time that still counts as recent. "today" starts at local midnight. */
++export function activityWindowStart(window: SidebarActivityWindow, now: number): number {
++  switch (window) {
++    case "3h":
++      return now - 3 * HOUR_MS;
++    case "12h":
++      return now - 12 * HOUR_MS;
++    case "today":
++      return new Date(now).setHours(0, 0, 0, 0);
++  }
++}
++
++/**
++ * Activity grouping: everything still live in its status bucket, the work that finished inside
++ * the window under one Done group, and everything finished before it folded into one group per
++ * project, the project with the most recent finish first.
++ *
++ * A done workspace's `statusEnteredAt` is when it entered the done bucket, which is when it
++ * finished. A done workspace without one has no known finish, so it counts as older.
++ */
++export function buildActivityGroups(input: ActivityGroupsInput): SidebarWorkspaceGroup[] {
++  const { workspaces, projectNamesByViewKey, t } = input;
++  const windowStart = activityWindowStart(input.window, input.now);
++  const live: SidebarWorkspaceEntry[] = [];
++  const recent: SidebarWorkspaceEntry[] = [];
++  const olderByProject = new Map<string, SidebarWorkspaceEntry[]>();
++
++  for (const workspace of workspaces) {
++    if (workspace.statusBucket !== "done") {
++      live.push(workspace);
++      continue;
++    }
++    const finishedAt = workspace.statusEnteredAt?.getTime() ?? null;
++    if (finishedAt !== null && finishedAt >= windowStart) {
++      recent.push(workspace);
++      continue;
++    }
++    const rows = olderByProject.get(workspace.projectViewKey) ?? [];
++    rows.push(workspace);
++    olderByProject.set(workspace.projectViewKey, rows);
++  }
++
++  const groups = statusWorkspaceGroups(buildStatusGroups(live, projectNamesByViewKey, t));
++
++  if (recent.length > 0) {
++    recent.sort((a, b) => compareStatusRows(a, b, projectNamesByViewKey));
++    groups.push({
++      key: "activity:done",
++      label: t(DONE_LABEL_KEYS[input.window]),
++      rows: recent,
++      leading: { kind: "status", bucket: "done" },
++    });
++  }
++
++  const projectGroups: SidebarWorkspaceGroup[] = [];
++  for (const [projectViewKey, rows] of olderByProject) {
++    rows.sort((a, b) => compareStatusRows(a, b, projectNamesByViewKey));
++    projectGroups.push({
++      key: `activity:project:${projectViewKey}`,
++      label: projectNamesByViewKey.get(projectViewKey) ?? rows[0].projectName,
++      rows,
++      leading: { kind: "project", projectViewKey },
++    });
++  }
++  // Each group's rows are already newest first, so its first row is its most recent finish.
++  projectGroups.sort((a, b) => compareStatusRows(a.rows[0], b.rows[0], projectNamesByViewKey));
++
++  return [...groups, ...projectGroups];
++}
+diff --git a/packages/app/src/components/sidebar/display-preferences/menu.tsx b/packages/app/src/components/sidebar/display-preferences/menu.tsx
+index be5a66ff6..8c0d6b9f5 100644
+--- a/packages/app/src/components/sidebar/display-preferences/menu.tsx
++++ b/packages/app/src/components/sidebar/display-preferences/menu.tsx
+@@ -10,11 +10,15 @@ import { useTranslation } from "react-i18next";
+ import { View, type PressableStateCallbackType } from "react-native";
+ import { StyleSheet, withUnistyles } from "react-native-unistyles";
+ import {
++  Activity,
++  CalendarDays,
+   Captions,
+   Circle,
+   CircleCheck,
+   CircleDashed,
+   Clock,
++  Clock12,
++  Clock3,
+   Diff,
+   EyeOff,
+   Folder,
+@@ -47,7 +51,9 @@ import type { SidebarProjectEntry } from "@/hooks/use-sidebar-workspaces-list";
+ import type { Theme } from "@/styles/theme";
+ import {
+   hasActiveSidebarLabelFilter,
++  SIDEBAR_ACTIVITY_WINDOWS,
+   SIDEBAR_UNLABELLED_LABEL_KEY,
++  type SidebarActivityWindow,
+   type SidebarGroupMode,
+ } from "@/stores/sidebar-view-store";
+ import { workspaceLabelKey, type WorkspaceLabelColor } from "@getpaseo/protocol/workspace-labels";
+@@ -89,6 +95,13 @@ type OptionIcon = ComponentType<{
+ const GROUPING_ICONS: Record<SidebarGroupMode, OptionIcon> = {
+   project: withUnistyles(Folder),
+   status: withUnistyles(CircleDashed),
++  activity: withUnistyles(Activity),
++};
++
++const ACTIVITY_WINDOW_ICONS: Record<SidebarActivityWindow, OptionIcon> = {
++  "3h": withUnistyles(Clock3),
++  "12h": withUnistyles(Clock12),
++  today: withUnistyles(CalendarDays),
+ };
+ 
+ const TITLE_SOURCE_ICONS: Record<WorkspaceTitleSource, OptionIcon> = {
+@@ -120,13 +133,20 @@ const TRAILING_ICONS: Record<SidebarTrailingChoice, OptionIcon> = {
+   timestamp: withUnistyles(Clock),
+ };
+ 
+-const GROUPING_MODES: readonly SidebarGroupMode[] = ["project", "status"];
++const GROUPING_MODES: readonly SidebarGroupMode[] = ["project", "status", "activity"];
+ const TITLE_SOURCES: readonly WorkspaceTitleSource[] = ["title", "branch"];
+ const TRAILING_CHOICES: readonly SidebarTrailingChoice[] = ["diff", "timestamp"];
+ 
+ const GROUPING_LABEL_KEYS: Record<SidebarGroupMode, string> = {
+   project: "sidebar.display.grouping.project",
+   status: "sidebar.display.grouping.status",
++  activity: "sidebar.display.grouping.activity",
++};
++
++const ACTIVITY_WINDOW_LABEL_KEYS: Record<SidebarActivityWindow, string> = {
++  "3h": "sidebar.display.activityWindow.threeHours",
++  "12h": "sidebar.display.activityWindow.twelveHours",
++  today: "sidebar.display.activityWindow.today",
+ };
+ 
+ const TITLE_SOURCE_LABEL_KEYS: Record<WorkspaceTitleSource, string> = {
+@@ -205,6 +225,20 @@ export function SidebarDisplayPreferencesMenu(): ReactElement {
+           />
+         ),
+       },
++      {
++        id: "activityWindow",
++        title: t("sidebar.display.activityWindow.label"),
++        content: (
++          <OptionList
++            values={SIDEBAR_ACTIVITY_WINDOWS}
++            icons={ACTIVITY_WINDOW_ICONS}
++            labelKeys={ACTIVITY_WINDOW_LABEL_KEYS}
++            selectedValue={preferences.activityWindow}
++            onSelect={preferences.setActivityWindow}
++            testIDPrefix="sidebar-activity-window"
++          />
++        ),
++      },
+       {
+         id: "titleSource",
+         title: t("sidebar.display.titleSource.label"),
+@@ -308,6 +342,16 @@ export function SidebarDisplayPreferencesMenu(): ReactElement {
+           >
+             {t("sidebar.display.grouping.label")}
+           </MenuSubTrigger>
++          {/* The window only means something to activity grouping, so it shows only there. */}
++          {preferences.grouping === "activity" ? (
++            <MenuSubTrigger
++              id="activityWindow"
++              value={t(ACTIVITY_WINDOW_LABEL_KEYS[preferences.activityWindow])}
++              testID="sidebar-display-activity-window"
++            >
++              {t("sidebar.display.activityWindow.label")}
++            </MenuSubTrigger>
++          ) : null}
+           <MenuSubTrigger
+             id="titleSource"
+             value={t(TITLE_SOURCE_LABEL_KEYS[preferences.titleSource])}
+diff --git a/packages/app/src/components/sidebar/display-preferences/model.ts b/packages/app/src/components/sidebar/display-preferences/model.ts
+index 68d347a25..c48e4dce6 100644
+--- a/packages/app/src/components/sidebar/display-preferences/model.ts
++++ b/packages/app/src/components/sidebar/display-preferences/model.ts
+@@ -6,6 +6,7 @@ import {
+ } from "@/hooks/use-settings";
+ import {
+   useSidebarViewStore,
++  type SidebarActivityWindow,
+   type SidebarGroupMode,
+   type SidebarLabelFilter,
+ } from "@/stores/sidebar-view-store";
+@@ -20,6 +21,8 @@ export interface SidebarDisplayPreferences {
+   toggleBackground: () => void;
+   grouping: SidebarGroupMode;
+   setGrouping: (mode: SidebarGroupMode) => void;
++  activityWindow: SidebarActivityWindow;
++  setActivityWindow: (window: SidebarActivityWindow) => void;
+   titleSource: WorkspaceTitleSource;
+   setTitleSource: (source: WorkspaceTitleSource) => void;
+   rowItems: SidebarRowItems;
+@@ -54,6 +57,8 @@ export function useSidebarDisplayPreferences(): SidebarDisplayPreferences {
+   const toggleBackground = useSidebarViewStore((state) => state.toggleBackground);
+   const grouping = useSidebarViewStore((state) => state.groupMode);
+   const setGrouping = useSidebarViewStore((state) => state.setGroupMode);
++  const activityWindow = useSidebarViewStore((state) => state.activityWindow);
++  const setActivityWindow = useSidebarViewStore((state) => state.setActivityWindow);
+   const hostFilters = useSidebarViewStore((state) => state.hostFilters);
+   const toggleHostFilter = useSidebarViewStore((state) => state.toggleHostFilter);
+   const clearHostFilters = useSidebarViewStore((state) => state.clearHostFilters);
+@@ -112,6 +117,8 @@ export function useSidebarDisplayPreferences(): SidebarDisplayPreferences {
+       toggleBackground,
+       grouping,
+       setGrouping,
++      activityWindow,
++      setActivityWindow,
+       titleSource: workspaceTitleSource,
+       setTitleSource,
+       rowItems: sidebarRowItems,
+@@ -135,6 +142,8 @@ export function useSidebarDisplayPreferences(): SidebarDisplayPreferences {
+       toggleBackground,
+       grouping,
+       setGrouping,
++      activityWindow,
++      setActivityWindow,
+       workspaceTitleSource,
+       setTitleSource,
+       sidebarRowItems,
+diff --git a/packages/app/src/components/sidebar/sidebar-labels.ts b/packages/app/src/components/sidebar/sidebar-labels.ts
+index 0472d27a5..abb9406e9 100644
+--- a/packages/app/src/components/sidebar/sidebar-labels.ts
++++ b/packages/app/src/components/sidebar/sidebar-labels.ts
+@@ -7,9 +7,13 @@ export interface SidebarWorkspaceGroup {
+   key: string;
+   label: string;
+   rows: SidebarWorkspaceEntry[];
+-  leading: { kind: "status"; bucket: StatusBucket };
++  leading: SidebarWorkspaceGroupLeading;
+ }
+ 
++export type SidebarWorkspaceGroupLeading =
++  | { kind: "status"; bucket: StatusBucket }
++  | { kind: "project"; projectViewKey: string };
++
+ export function statusWorkspaceGroups(groups: readonly StatusGroup[]): SidebarWorkspaceGroup[] {
+   return groups.map((group) => ({
+     key: group.bucket,
+diff --git a/packages/app/src/components/sidebar/sidebar-model.tsx b/packages/app/src/components/sidebar/sidebar-model.tsx
+index ec834aee1..8a91118dc 100644
+--- a/packages/app/src/components/sidebar/sidebar-model.tsx
++++ b/packages/app/src/components/sidebar/sidebar-model.tsx
+@@ -15,6 +15,7 @@ import {
+   type SidebarGroupMode,
+ } from "@/stores/sidebar-view-store";
+ import { useSidebarOrderStore } from "@/stores/sidebar-order-store";
++import { useRelativeTimeTick } from "@/usage/use-relative-time-tick";
+ import type { SidebarShortcutModel } from "@/utils/sidebar-shortcuts";
+ import { buildSidebarProjection } from "./sidebar-projection";
+ import type { SidebarProjectIconTarget } from "@/utils/sidebar-project-row-model";
+@@ -59,6 +60,9 @@ export function SidebarModelProvider({
+   const list = useSidebarWorkspacesList({ enabled: active });
+   const showBackground = useSidebarViewStore((state) => state.showBackground);
+   const groupMode = useSidebarViewStore((state) => state.groupMode);
++  const activityWindow = useSidebarViewStore((state) => state.activityWindow);
++  // Activity grouping moves finished work out of Done as time passes, with nothing else changing.
++  const now = useRelativeTimeTick({ enabled: groupMode === "activity" });
+   const labelFilter = useSidebarViewStore((state) => state.labelFilter);
+   const projectFilters = useSidebarViewStore((state) => state.projectFilters);
+   const reconcileLabelFilter = useSidebarViewStore((state) => state.reconcileLabelFilter);
+@@ -156,15 +160,19 @@ export function SidebarModelProvider({
+       workspaceEntriesByKey: filteredWorkspaceEntriesByKey,
+       projectNamesByViewKey: list.projectNamesByViewKey,
+       groupMode,
++      activityWindow,
++      now,
+       pinnedCollapsed,
+       collapsedProjectKeys,
+       collapsedWorkspaceGroupKeys,
+       t,
+     }),
+     [
++      activityWindow,
+       collapsedProjectKeys,
+       collapsedWorkspaceGroupKeys,
+       groupMode,
++      now,
+       list.projectNamesByViewKey,
+       filteredProjects,
+       pinnedCollapsed,
+diff --git a/packages/app/src/components/sidebar/sidebar-projection.test.ts b/packages/app/src/components/sidebar/sidebar-projection.test.ts
+index c2dc31f2e..fca595cbb 100644
+--- a/packages/app/src/components/sidebar/sidebar-projection.test.ts
++++ b/packages/app/src/components/sidebar/sidebar-projection.test.ts
+@@ -65,7 +65,7 @@ function makeProject(
+ }
+ 
+ function projectionInput(options?: {
+-  groupMode?: "project" | "status";
++  groupMode?: "project" | "status" | "activity";
+   pinnedCollapsed?: boolean;
+ }) {
+   const pinned = makeWorkspace("pinned", "running");
+@@ -83,6 +83,8 @@ function projectionInput(options?: {
+     ]),
+     projectNamesByViewKey: new Map([["project", "Project"]]),
+     groupMode: options?.groupMode ?? ("project" as const),
++    activityWindow: "today" as const,
++    now: Date.parse("2026-07-12T12:00:00.000Z"),
+     pinnedCollapsed: options?.pinnedCollapsed ?? false,
+     collapsedProjectKeys: new Set<string>(),
+     collapsedWorkspaceGroupKeys: new Set<string>(),
+@@ -94,7 +96,7 @@ function projectionInput(options?: {
+  * Two projects, one workspace each, both labelled — so every grouping mode puts rows from more
+  * than one project on screen, and a mode that asked for fewer icons than it renders would show it.
+  */
+-function twoProjectInput(groupMode: "project" | "status") {
++function twoProjectInput(groupMode: "project" | "status" | "activity") {
+   const first = makeWorkspace("first", "running", ["Urgent"], "project");
+   const second = makeWorkspace("second", "needs_input", ["Backend"], "other-project");
+   return {
+@@ -115,7 +117,7 @@ function twoProjectInput(groupMode: "project" | "status") {
+ describe("buildSidebarProjection", () => {
+   // The rule that outlived the bug it was written for: a project icon is fetched per project, so
+   // whatever a mode groups by, the rows it produces can only reference projects already covered.
+-  for (const groupMode of ["project", "status"] as const) {
++  for (const groupMode of ["project", "status", "activity"] as const) {
+     it(`covers every row ${groupMode} grouping renders with a project icon target`, () => {
+       const projection = buildSidebarProjection(twoProjectInput(groupMode));
+       const covered = new Set(projection.projectIconTargets.map((target) => target.projectViewKey));
+diff --git a/packages/app/src/components/sidebar/sidebar-projection.ts b/packages/app/src/components/sidebar/sidebar-projection.ts
+index 2e84f02aa..f149f5e5e 100644
+--- a/packages/app/src/components/sidebar/sidebar-projection.ts
++++ b/packages/app/src/components/sidebar/sidebar-projection.ts
+@@ -9,7 +9,7 @@ import type {
+   SidebarProjectEntry,
+   SidebarWorkspaceEntry,
+ } from "@/hooks/use-sidebar-workspaces-list";
+-import type { SidebarGroupMode } from "@/stores/sidebar-view-store";
++import type { SidebarActivityWindow, SidebarGroupMode } from "@/stores/sidebar-view-store";
+ import {
+   resolveSidebarProjectIconTargets,
+   type SidebarProjectIconTarget,
+@@ -19,6 +19,7 @@ import {
+   type SidebarShortcutModel,
+   type SidebarShortcutSection,
+ } from "@/utils/sidebar-shortcuts";
++import { buildActivityGroups } from "./activity-groups";
+ import { statusWorkspaceGroups, type SidebarWorkspaceGroup } from "./sidebar-labels";
+ 
+ export interface SidebarProjection {
+@@ -43,6 +44,9 @@ export interface SidebarProjectionInput {
+   workspaceEntriesByKey: ReadonlyMap<string, SidebarWorkspaceEntry>;
+   projectNamesByViewKey: Map<string, string>;
+   groupMode: SidebarGroupMode;
++  activityWindow: SidebarActivityWindow;
++  /** Only activity grouping reads the clock; the other modes ignore it. */
++  now: number;
+   pinnedCollapsed: boolean;
+   collapsedProjectKeys: ReadonlySet<string>;
+   collapsedWorkspaceGroupKeys: ReadonlySet<string>;
+@@ -92,7 +96,7 @@ export function buildSidebarProjection(input: SidebarProjectionInput): SidebarPr
+   };
+ }
+ 
+-/** Project mode keeps its project headers and groups nothing; status mode groups the rows. */
++/** Project mode keeps its project headers and groups nothing; the other modes group the rows. */
+ function buildWorkspaceGroups(
+   input: SidebarProjectionInput,
+   unpinnedWorkspaces: SidebarWorkspaceEntry[],
+@@ -104,5 +108,13 @@ function buildWorkspaceGroups(
+       return statusWorkspaceGroups(
+         buildStatusGroups(unpinnedWorkspaces, input.projectNamesByViewKey, input.t),
+       );
++    case "activity":
++      return buildActivityGroups({
++        workspaces: unpinnedWorkspaces,
++        projectNamesByViewKey: input.projectNamesByViewKey,
++        window: input.activityWindow,
++        now: input.now,
++        t: input.t,
++      });
+   }
+ }
+diff --git a/packages/app/src/components/sidebar/sidebar-status-list.tsx b/packages/app/src/components/sidebar/sidebar-status-list.tsx
+index baffc3a01..f2b5c8f27 100644
+--- a/packages/app/src/components/sidebar/sidebar-status-list.tsx
++++ b/packages/app/src/components/sidebar/sidebar-status-list.tsx
+@@ -61,6 +61,7 @@ import {
+ } from "@/components/sidebar/sidebar-workspace-row-content";
+ import { useOpenKebabMenuVisibility } from "@/components/sidebar/use-open-kebab-menu-visibility";
+ import { getSidebarRowBackdrop } from "@/components/sidebar/sidebar-row-backdrop";
++import { ProjectStatusIndicator } from "@/components/sidebar/project-leading-visual";
+ import { getStatusDotColor } from "@/utils/status-dot-color";
+ import { selectWorkspaceServiceSummary } from "@/components/sidebar/workspace-meta-row";
+ import {
+@@ -346,10 +347,20 @@ function StatusGroupRows({
+     canToggle: canToggleWorkspaces,
+     toggleExpanded: toggleWorkspacesExpanded,
+   } = useLimitedSidebarGroup(group.rows);
++  // A project group's header already names the project, so its rows lead with their status.
++  const showsProjectOnRows = group.leading.kind !== "project";
++  const headerProjectIconDataUri =
++    group.leading.kind === "project"
++      ? (projectIconByProjectViewKey.get(group.leading.projectViewKey) ?? null)
++      : null;
+ 
+   return (
+     <View style={collapsed ? undefined : styles.statusGroupBlockExpanded}>
+-      <StatusGroupHeader group={group} collapsed={collapsed} />
++      <StatusGroupHeader
++        group={group}
++        collapsed={collapsed}
++        projectIconDataUri={headerProjectIconDataUri}
++      />
+       {!collapsed ? (
+         <View
+           style={styles.statusWorkspaceListContainer}
+@@ -363,6 +374,7 @@ function StatusGroupRows({
+                 workspace,
+                 projectIconByProjectViewKey,
+                 hostBadgeByServerId,
++                showProject: showsProjectOnRows,
+               })}
+               shortcutNumber={shortcutIndex.get(workspace.workspaceKey) ?? null}
+               showShortcutBadge={showShortcutBadges}
+@@ -387,7 +399,7 @@ function StatusGroupRows({
+ 
+ interface StatusRowProjectPresentation {
+   hostBadge: HostBadgeModel | null;
+-  projectName: string;
++  projectName: string | null;
+   projectIconDataUri: string | null;
+ }
+ 
+@@ -395,13 +407,19 @@ function buildStatusRowProjectPresentation({
+   workspace,
+   projectIconByProjectViewKey,
+   hostBadgeByServerId,
++  showProject = true,
+ }: {
+   workspace: SidebarWorkspaceEntry;
+   projectIconByProjectViewKey: ReadonlyMap<string, string | null>;
+   hostBadgeByServerId: ReadonlyMap<string, HostBadgeModel>;
++  showProject?: boolean;
+ }): StatusRowProjectPresentation {
++  const hostBadge = hostBadgeByServerId.get(workspace.serverId) ?? null;
++  if (!showProject) {
++    return { hostBadge, projectName: null, projectIconDataUri: null };
++  }
+   return {
+-    hostBadge: hostBadgeByServerId.get(workspace.serverId) ?? null,
++    hostBadge,
+     projectName: workspace.projectName,
+     projectIconDataUri: projectIconByProjectViewKey.get(workspace.projectViewKey) ?? null,
+   };
+@@ -410,9 +428,11 @@ function buildStatusRowProjectPresentation({
+ function StatusGroupHeader({
+   group,
+   collapsed,
++  projectIconDataUri,
+ }: {
+   group: SidebarWorkspaceGroup;
+   collapsed: boolean;
++  projectIconDataUri: string | null;
+ }) {
+   const { t } = useTranslation();
+   const [isHovered, setIsHovered] = useState(false);
+@@ -448,6 +468,8 @@ function StatusGroupHeader({
+           <View style={styles.statusGroupLeadingVisualSlot}>
+             <StatusGroupLeadingVisual
+               leading={group.leading}
++              label={group.label}
++              projectIconDataUri={projectIconDataUri}
+               collapsed={collapsed}
+               showChevron={isHovered}
+             />
+@@ -465,14 +487,29 @@ function StatusGroupHeader({
+ 
+ function StatusGroupLeadingVisual({
+   leading,
++  label,
++  projectIconDataUri,
+   collapsed,
+   showChevron,
+ }: {
+   leading: SidebarWorkspaceGroup["leading"];
++  label: string;
++  projectIconDataUri: string | null;
+   collapsed: boolean;
+   showChevron: boolean;
+ }) {
+   if (!showChevron) {
++    if (leading.kind === "project") {
++      return (
++        <ProjectStatusIndicator
++          iconDataUri={projectIconDataUri}
++          displayName={label}
++          projectViewKey={leading.projectViewKey}
++          statusBucket={null}
++          backdrop={PROJECT_GROUP_ICON_BACKDROP}
++        />
++      );
++    }
+     return <StatusGroupIcon bucket={leading.bucket} />;
+   }
+   if (collapsed) {
+@@ -481,6 +518,9 @@ function StatusGroupLeadingVisual({
+   return <ThemedChevronDown uniProps={mutedGroupIconProps} />;
+ }
+ 
++// The project icon carries no status badge here, so nothing knocks out of the header background.
++const PROJECT_GROUP_ICON_BACKDROP = getSidebarRowBackdrop({});
++
+ function StatusGroupIcon({ bucket }: { bucket: StatusBucket }) {
+   switch (bucket) {
+     case "needs_input":
+@@ -514,7 +554,7 @@ const StatusWorkspaceRow = memo(function StatusWorkspaceRow({
+ }: {
+   workspace: SidebarWorkspaceEntry;
+   hostBadge: HostBadgeModel | null;
+-  projectName: string;
++  projectName: string | null;
+   projectIconDataUri: string | null;
+   shortcutNumber: number | null;
+   showShortcutBadge: boolean;
+@@ -582,7 +622,7 @@ function StatusWorkspaceRowWithMenu({
+ }: {
+   workspace: SidebarWorkspaceEntry;
+   hostBadge: HostBadgeModel | null;
+-  projectName: string;
++  projectName: string | null;
+   projectIconDataUri: string | null;
+   selected: boolean;
+   shortcutNumber: number | null;
+@@ -719,7 +759,7 @@ function StatusWorkspaceRowWithMenu({
+ interface StatusWorkspaceRowInnerProps {
+   workspace: SidebarWorkspaceEntry;
+   hostBadge: HostBadgeModel | null;
+-  projectName: string;
++  projectName: string | null;
+   projectIconDataUri: string | null;
+   selected: boolean;
+   shortcutNumber: number | null;
+diff --git a/packages/app/src/hooks/sidebar-status-view-model.ts b/packages/app/src/hooks/sidebar-status-view-model.ts
+index 5736c7f39..774a49adc 100644
+--- a/packages/app/src/hooks/sidebar-status-view-model.ts
++++ b/packages/app/src/hooks/sidebar-status-view-model.ts
+@@ -54,7 +54,7 @@ export function buildStatusGroups(
+   return groups;
+ }
+ 
+-function compareStatusRows(
++export function compareStatusRows(
+   a: SidebarWorkspaceEntry,
+   b: SidebarWorkspaceEntry,
+   projectNamesByViewKey: Map<string, string>,
+diff --git a/packages/app/src/i18n/resources/ar.ts b/packages/app/src/i18n/resources/ar.ts
+index accd9cec6..1a2a0cac2 100644
+--- a/packages/app/src/i18n/resources/ar.ts
++++ b/packages/app/src/i18n/resources/ar.ts
+@@ -1158,6 +1158,13 @@ export const ar: TranslationResources = {
+       working: "قيد العمل",
+       done: "تم",
+     },
++    activity: {
++      doneWithin: {
++        threeHours: "تم خلال آخر 3 ساعات",
++        twelveHours: "تم خلال آخر 12 ساعة",
++        today: "تم اليوم",
++      },
++    },
+     display: {
+       showBackground: "إظهار مساحات العمل في الخلفية",
+       trigger: "تفضيلات العرض",
+@@ -1166,8 +1173,15 @@ export const ar: TranslationResources = {
+         label: "التجميع",
+         project: "المشروع",
+         status: "الحالة",
++        activity: "النشاط",
+         labels: "التسميات",
+       },
++      activityWindow: {
++        label: "تم خلال",
++        threeHours: "3 ساعات",
++        twelveHours: "12 ساعة",
++        today: "اليوم",
++      },
+       titleSource: {
+         label: "العنوان",
+         title: "العنوان",
+diff --git a/packages/app/src/i18n/resources/en.ts b/packages/app/src/i18n/resources/en.ts
+index 8002c0ff4..92dccc31f 100644
+--- a/packages/app/src/i18n/resources/en.ts
++++ b/packages/app/src/i18n/resources/en.ts
+@@ -1166,6 +1166,13 @@ export const en = {
+       working: "Working",
+       done: "Done",
+     },
++    activity: {
++      doneWithin: {
++        threeHours: "Done in the last 3 hours",
++        twelveHours: "Done in the last 12 hours",
++        today: "Done today",
++      },
++    },
+     display: {
+       showBackground: "Show background",
+       trigger: "Display preferences",
+@@ -1174,8 +1181,15 @@ export const en = {
+         label: "Grouping",
+         project: "Project",
+         status: "Status",
++        activity: "Activity",
+         labels: "Labels",
+       },
++      activityWindow: {
++        label: "Done within",
++        threeHours: "3 hours",
++        twelveHours: "12 hours",
++        today: "Today",
++      },
+       titleSource: {
+         label: "Title",
+         title: "Title",
+diff --git a/packages/app/src/i18n/resources/es.ts b/packages/app/src/i18n/resources/es.ts
+index 464b1ab20..3126734bf 100644
+--- a/packages/app/src/i18n/resources/es.ts
++++ b/packages/app/src/i18n/resources/es.ts
+@@ -1194,6 +1194,13 @@ export const es: TranslationResources = {
+       working: "En ejecución",
+       done: "Terminado",
+     },
++    activity: {
++      doneWithin: {
++        threeHours: "Terminado en las últimas 3 horas",
++        twelveHours: "Terminado en las últimas 12 horas",
++        today: "Terminado hoy",
++      },
++    },
+     display: {
+       showBackground: "Mostrar espacios en segundo plano",
+       trigger: "Preferencias de visualización",
+@@ -1202,8 +1209,15 @@ export const es: TranslationResources = {
+         label: "Agrupación",
+         project: "Proyecto",
+         status: "Estado",
++        activity: "Actividad",
+         labels: "Etiquetas",
+       },
++      activityWindow: {
++        label: "Terminado en",
++        threeHours: "3 horas",
++        twelveHours: "12 horas",
++        today: "Hoy",
++      },
+       titleSource: {
+         label: "Título",
+         title: "Título",
+diff --git a/packages/app/src/i18n/resources/fr.ts b/packages/app/src/i18n/resources/fr.ts
+index 4f8b43889..b7c4d6d28 100644
+--- a/packages/app/src/i18n/resources/fr.ts
++++ b/packages/app/src/i18n/resources/fr.ts
+@@ -1187,6 +1187,13 @@ export const fr: TranslationResources = {
+       working: "En cours",
+       done: "Terminé",
+     },
++    activity: {
++      doneWithin: {
++        threeHours: "Terminé ces 3 dernières heures",
++        twelveHours: "Terminé ces 12 dernières heures",
++        today: "Terminé aujourd’hui",
++      },
++    },
+     display: {
+       showBackground: "Afficher les espaces en arrière-plan",
+       trigger: "Préférences d’affichage",
+@@ -1195,8 +1202,15 @@ export const fr: TranslationResources = {
+         label: "Regroupement",
+         project: "Projet",
+         status: "Statut",
++        activity: "Activité",
+         labels: "Libellés",
+       },
++      activityWindow: {
++        label: "Terminé depuis",
++        threeHours: "3 heures",
++        twelveHours: "12 heures",
++        today: "Aujourd’hui",
++      },
+       titleSource: {
+         label: "Titre",
+         title: "Titre",
+diff --git a/packages/app/src/i18n/resources/ja.ts b/packages/app/src/i18n/resources/ja.ts
+index 9fb11cb2e..65734fa92 100644
+--- a/packages/app/src/i18n/resources/ja.ts
++++ b/packages/app/src/i18n/resources/ja.ts
+@@ -1171,6 +1171,13 @@ export const ja: TranslationResources = {
+       working: "実行中",
+       done: "完了",
+     },
++    activity: {
++      doneWithin: {
++        threeHours: "過去3時間に完了",
++        twelveHours: "過去12時間に完了",
++        today: "今日完了",
++      },
++    },
+     display: {
+       showBackground: "バックグラウンドを表示",
+       trigger: "表示設定",
+@@ -1179,8 +1186,15 @@ export const ja: TranslationResources = {
+         label: "グループ化",
+         project: "プロジェクト",
+         status: "ステータス",
++        activity: "アクティビティ",
+         labels: "ラベル",
+       },
++      activityWindow: {
++        label: "完了の期間",
++        threeHours: "3時間",
++        twelveHours: "12時間",
++        today: "今日",
++      },
+       titleSource: {
+         label: "タイトル",
+         title: "タイトル",
+diff --git a/packages/app/src/i18n/resources/ko.ts b/packages/app/src/i18n/resources/ko.ts
+index e079ae90f..e9c539529 100644
+--- a/packages/app/src/i18n/resources/ko.ts
++++ b/packages/app/src/i18n/resources/ko.ts
+@@ -1165,6 +1165,13 @@ export const ko: TranslationResources = {
+       working: "실행 중",
+       done: "완료",
+     },
++    activity: {
++      doneWithin: {
++        threeHours: "최근 3시간 내 완료",
++        twelveHours: "최근 12시간 내 완료",
++        today: "오늘 완료",
++      },
++    },
+     display: {
+       showBackground: "백그라운드 표시",
+       trigger: "표시 설정",
+@@ -1173,8 +1180,15 @@ export const ko: TranslationResources = {
+         label: "그룹화",
+         project: "프로젝트",
+         status: "상태",
++        activity: "활동",
+         labels: "레이블",
+       },
++      activityWindow: {
++        label: "완료 기간",
++        threeHours: "3시간",
++        twelveHours: "12시간",
++        today: "오늘",
++      },
+       titleSource: {
+         label: "제목",
+         title: "제목",
+diff --git a/packages/app/src/i18n/resources/pt-BR.ts b/packages/app/src/i18n/resources/pt-BR.ts
+index 84a5cb7c5..84731828b 100644
+--- a/packages/app/src/i18n/resources/pt-BR.ts
++++ b/packages/app/src/i18n/resources/pt-BR.ts
+@@ -1184,6 +1184,13 @@ export const ptBR: TranslationResources = {
+       working: "Em execução",
+       done: "Concluído",
+     },
++    activity: {
++      doneWithin: {
++        threeHours: "Concluído nas últimas 3 horas",
++        twelveHours: "Concluído nas últimas 12 horas",
++        today: "Concluído hoje",
++      },
++    },
+     display: {
+       showBackground: "Mostrar espaços em segundo plano",
+       trigger: "Preferências de exibição",
+@@ -1192,8 +1199,15 @@ export const ptBR: TranslationResources = {
+         label: "Agrupamento",
+         project: "Projeto",
+         status: "Status",
++        activity: "Atividade",
+         labels: "Etiquetas",
+       },
++      activityWindow: {
++        label: "Concluído em",
++        threeHours: "3 horas",
++        twelveHours: "12 horas",
++        today: "Hoje",
++      },
+       titleSource: {
+         label: "Título",
+         title: "Título",
+diff --git a/packages/app/src/i18n/resources/ru.ts b/packages/app/src/i18n/resources/ru.ts
+index 54f0c2d6c..3caeb3d7e 100644
+--- a/packages/app/src/i18n/resources/ru.ts
++++ b/packages/app/src/i18n/resources/ru.ts
+@@ -1175,6 +1175,13 @@ export const ru: TranslationResources = {
+       working: "В работе",
+       done: "Готово",
+     },
++    activity: {
++      doneWithin: {
++        threeHours: "Готово за последние 3 часа",
++        twelveHours: "Готово за последние 12 часов",
++        today: "Готово сегодня",
++      },
++    },
+     display: {
+       showBackground: "Показать фоновые пространства",
+       trigger: "Настройки отображения",
+@@ -1183,8 +1190,15 @@ export const ru: TranslationResources = {
+         label: "Группировка",
+         project: "Проект",
+         status: "Статус",
++        activity: "Активность",
+         labels: "Метки",
+       },
++      activityWindow: {
++        label: "Готово за",
++        threeHours: "3 часа",
++        twelveHours: "12 часов",
++        today: "Сегодня",
++      },
+       titleSource: {
+         label: "Заголовок",
+         title: "Заголовок",
+diff --git a/packages/app/src/i18n/resources/zh-CN.ts b/packages/app/src/i18n/resources/zh-CN.ts
+index 8476e5546..aea62ae63 100644
+--- a/packages/app/src/i18n/resources/zh-CN.ts
++++ b/packages/app/src/i18n/resources/zh-CN.ts
+@@ -1150,6 +1150,13 @@ export const zhCN: TranslationResources = {
+       working: "运行中",
+       done: "已完成",
+     },
++    activity: {
++      doneWithin: {
++        threeHours: "最近 3 小时完成",
++        twelveHours: "最近 12 小时完成",
++        today: "今天完成",
++      },
++    },
+     display: {
+       showBackground: "显示后台工作区",
+       trigger: "显示偏好",
+@@ -1158,8 +1165,15 @@ export const zhCN: TranslationResources = {
+         label: "分组",
+         project: "项目",
+         status: "状态",
++        activity: "活动",
+         labels: "标签",
+       },
++      activityWindow: {
++        label: "完成于",
++        threeHours: "3 小时",
++        twelveHours: "12 小时",
++        today: "今天",
++      },
+       titleSource: {
+         label: "标题",
+         title: "标题",
+diff --git a/packages/app/src/stores/sidebar-view-store.test.ts b/packages/app/src/stores/sidebar-view-store.test.ts
+index e21c8f8a1..80f7a29c3 100644
+--- a/packages/app/src/stores/sidebar-view-store.test.ts
++++ b/packages/app/src/stores/sidebar-view-store.test.ts
+@@ -33,6 +33,7 @@ describe("sidebar view store", () => {
+   beforeEach(() => {
+     useSidebarViewStore.setState({
+       showBackground: false,
++      activityWindow: "today",
+       groupMode: "project",
+       hostFilters: [],
+       projectFilters: [],
+@@ -86,6 +87,7 @@ describe("sidebar view store", () => {
+       }),
+     ).toEqual({
+       showBackground: false,
++      activityWindow: "today",
+       groupMode: "status",
+       hostFilters: [],
+       projectFilters: [],
+@@ -93,6 +95,26 @@ describe("sidebar view store", () => {
+     });
+   });
+ 
++  it("keeps the activity grouping and its completion window", () => {
++    expect(
++      migrateSidebarViewState({ groupMode: "activity", activityWindow: "3h", hostFilters: [] }),
++    ).toEqual({
++      showBackground: false,
++      activityWindow: "3h",
++      groupMode: "activity",
++      hostFilters: [],
++      projectFilters: [],
++      labelFilter: { labels: [] },
++    });
++  });
++
++  it("defaults the completion window to today for state saved before it existed", () => {
++    expect(migrateSidebarViewState({ groupMode: "status" })).toMatchObject({
++      groupMode: "status",
++      activityWindow: "today",
++    });
++  });
++
+   it("migrates a pre-v2 single host filter to the multi-host list", () => {
+     expect(
+       migrateSidebarViewState({
+@@ -101,6 +123,7 @@ describe("sidebar view store", () => {
+       }),
+     ).toEqual({
+       showBackground: false,
++      activityWindow: "today",
+       groupMode: "status",
+       hostFilters: ["host-a"],
+       projectFilters: [],
+@@ -116,6 +139,7 @@ describe("sidebar view store", () => {
+       }),
+     ).toEqual({
+       showBackground: false,
++      activityWindow: "today",
+       groupMode: "status",
+       hostFilters: ["host-a", "host-b"],
+       projectFilters: [],
+@@ -227,6 +251,7 @@ describe("sidebar view store", () => {
+       }),
+     ).toEqual({
+       showBackground: false,
++      activityWindow: "today",
+       groupMode: "project",
+       hostFilters: ["host-a"],
+       projectFilters: ["project-a", "project-b"],
+@@ -237,6 +262,7 @@ describe("sidebar view store", () => {
+   it("never keeps project filters from state the schema rejects", () => {
+     expect(migrateSidebarViewState({ projectFilters: "project-a" })).toEqual({
+       showBackground: false,
++      activityWindow: "today",
+       groupMode: "project",
+       hostFilters: [],
+       projectFilters: [],
+diff --git a/packages/app/src/stores/sidebar-view-store.ts b/packages/app/src/stores/sidebar-view-store.ts
+index 0e12c304a..4611d0cd0 100644
+--- a/packages/app/src/stores/sidebar-view-store.ts
++++ b/packages/app/src/stores/sidebar-view-store.ts
+@@ -5,11 +5,15 @@ import { z } from "zod";
+ import { workspaceLabelKey } from "@getpaseo/protocol/workspace-labels";
+ import { createValidatedPersistStorage } from "@/storage/validated-persist-storage";
+ 
+-export type SidebarGroupMode = "project" | "status";
++export type SidebarGroupMode = "project" | "status" | "activity";
++
++/** How recently a workspace must have finished to stay under Done in activity grouping. */
++export type SidebarActivityWindow = "3h" | "12h" | "today";
++export const SIDEBAR_ACTIVITY_WINDOWS: readonly SidebarActivityWindow[] = ["3h", "12h", "today"];
+ 
+ const SIDEBAR_VIEW_STORAGE_KEY = "sidebar-view";
+ const LEGACY_SIDEBAR_GROUP_MODE_STORAGE_KEY = "sidebar-group-mode";
+-const SIDEBAR_VIEW_STORE_VERSION = 7;
++const SIDEBAR_VIEW_STORE_VERSION = 8;
+ 
+ /**
+  * The key standing for "this workspace carries no labels at all".
+@@ -47,6 +51,7 @@ function toggleFilterEntry(list: readonly string[], key: string): string[] {
+ 
+ interface SidebarViewStoreState {
+   groupMode: SidebarGroupMode;
++  activityWindow: SidebarActivityWindow;
+   showBackground: boolean;
+   // Empty means "all hosts". A non-empty list pins the sidebar to those hosts.
+   hostFilters: string[];
+@@ -64,6 +69,7 @@ interface SidebarViewStoreState {
+   labelFilter: SidebarLabelFilter;
+   toggleBackground: () => void;
+   setGroupMode: (mode: SidebarGroupMode) => void;
++  setActivityWindow: (window: SidebarActivityWindow) => void;
+   toggleHostFilter: (serverId: string) => void;
+   clearHostFilters: () => void;
+   toggleProjectFilter: (viewKey: string) => void;
+@@ -76,19 +82,22 @@ interface SidebarViewStoreState {
+ 
+ interface SidebarViewPersistedState {
+   groupMode: SidebarGroupMode;
++  activityWindow: SidebarActivityWindow;
+   showBackground: boolean;
+   hostFilters: string[];
+   projectFilters: string[];
+   labelFilter: SidebarLabelFilter;
+ }
+ 
+-const PersistedSidebarGroupModeSchema = z.enum(["project", "status", "label"]);
++const PersistedSidebarGroupModeSchema = z.enum(["project", "status", "activity", "label"]);
++const SidebarActivityWindowSchema = z.enum(["3h", "12h", "today"]);
+ const SidebarLabelFilterSchema = z.object({
+   labels: z.array(z.string()),
+ });
+ const SidebarViewPersistedStateSchema = z.strictObject({
+   showBackground: z.boolean().optional(),
+   groupMode: PersistedSidebarGroupModeSchema.optional(),
++  activityWindow: SidebarActivityWindowSchema.optional(),
+   hostFilters: z.array(z.string()).optional(),
+   hostFilter: z.string().nullable().optional(),
+   projectFilters: z.array(z.string()).optional(),
+@@ -127,6 +136,7 @@ export function migrateSidebarViewState(persistedState: unknown): SidebarViewPer
+   if (!result.success) {
+     return {
+       showBackground: false,
++      activityWindow: "today",
+       groupMode: "project",
+       hostFilters: [],
+       projectFilters: [],
+@@ -139,6 +149,7 @@ export function migrateSidebarViewState(persistedState: unknown): SidebarViewPer
+   if (legacyGroupMode) {
+     return {
+       showBackground: false,
++      activityWindow: "today",
+       groupMode: legacyGroupMode,
+       hostFilters: [],
+       projectFilters: [],
+@@ -148,7 +159,10 @@ export function migrateSidebarViewState(persistedState: unknown): SidebarViewPer
+ 
+   return {
+     showBackground: state.showBackground ?? false,
+-    groupMode: state.groupMode === "status" ? "status" : "project",
++    activityWindow: state.activityWindow ?? "today",
++    // The retired Labels grouping folds back into project grouping.
++    groupMode:
++      state.groupMode === undefined || state.groupMode === "label" ? "project" : state.groupMode,
+     hostFilters: readHostFilters(state),
+     projectFilters: state.projectFilters ?? [],
+     labelFilter: state.labelFilter
+@@ -187,11 +201,13 @@ export const useSidebarViewStore = create<SidebarViewStoreState>()(
+     (set) => ({
+       showBackground: false,
+       groupMode: "project",
++      activityWindow: "today",
+       hostFilters: [],
+       projectFilters: [],
+       labelFilter: emptyLabelFilter(),
+       toggleBackground: () => set((state) => ({ showBackground: !state.showBackground })),
+       setGroupMode: (mode) => set({ groupMode: mode }),
++      setActivityWindow: (window) => set({ activityWindow: window }),
+       toggleHostFilter: (serverId) =>
+         set((state) => ({ hostFilters: toggleFilterEntry(state.hostFilters, serverId) })),
+       clearHostFilters: () => set({ hostFilters: [] }),
+@@ -239,6 +255,7 @@ export const useSidebarViewStore = create<SidebarViewStoreState>()(
+       partialize: (state) => ({
+         showBackground: state.showBackground ?? false,
+         groupMode: state.groupMode,
++        activityWindow: state.activityWindow,
+         hostFilters: state.hostFilters,
+         projectFilters: state.projectFilters,
+         labelFilter: state.labelFilter,
+-- 
+2.50.1 (Apple Git-155)
+

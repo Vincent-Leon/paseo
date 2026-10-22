@@ -3,3 +3,13 @@
 # cover each patch; the full suite never runs here.
 packages/server src/server/agent/providers/claude/agent.timeline-assembly.test.ts
 packages/app src/agent-stream/thought-preview.test.ts
+packages/app src/components/sidebar/activity-groups.test.ts
+packages/app src/components/sidebar/sidebar-projection.test.ts
+packages/app src/stores/sidebar-view-store.test.ts
+packages/app src/usage/model.test.ts
+packages/app src/usage/pinned.test.ts
+packages/plugin src/server/usage.test.ts
+packages/server src/server/plugins/usage-sources/index.test.ts
+plugins kimi-usage-source/server/usage.test.ts
+plugins minimax-usage-source/server/usage.test.ts
+plugins cursor-usage-source/server/usage.test.ts
