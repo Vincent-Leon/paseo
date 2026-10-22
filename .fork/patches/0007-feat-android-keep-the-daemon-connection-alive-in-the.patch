@@ -1,7 +1,7 @@
-From 4d344cf99f93deb50c051e71ddeb7dd176d5d799 Mon Sep 17 00:00:00 2001
+From c483fb1772244e71405b33b0b39e375ecb6a7e62 Mon Sep 17 00:00:00 2001
 From: Vincent Leon <leon@mbp.com>
 Date: Thu, 22 Oct 2026 23:29:49 +0800
-Subject: [PATCH 7/7] feat(android): keep the daemon connection alive in the
+Subject: [PATCH] feat(android): keep the daemon connection alive in the
  background
 
 On HarmonyOS's Android compatibility layer, and under aggressive vendor
@@ -282,18 +282,18 @@ index 000000000..5f1f9b474
 +  "private": true
 +}
 diff --git a/packages/app/src/app/_layout.tsx b/packages/app/src/app/_layout.tsx
-index f24df99f2..9cbc2580c 100644
+index 559726d7c..57d964b12 100644
 --- a/packages/app/src/app/_layout.tsx
 +++ b/packages/app/src/app/_layout.tsx
-@@ -91,6 +91,7 @@ import { KeyboardShiftProvider } from "@/keyboard/shift";
+@@ -97,6 +97,7 @@ import { KeyboardShiftProvider } from "@/keyboard/shift";
  import { useCompactWebViewportZoomLock } from "@/hooks/use-compact-web-viewport-zoom-lock";
  import { useOpenProject } from "@/hooks/use-open-project";
  import { useAppSettings } from "@/hooks/use-settings";
 +import { BackgroundConnectionSync } from "@/background-connection/sync";
+ import { useStableEvent } from "@/hooks/use-stable-event";
  import { useOpenAgentListGesture } from "@/mobile-panels/gestures";
  import { MobilePanelsProvider, useIsMobilePanelActive } from "@/mobile-panels/provider";
- import {
-@@ -579,6 +580,7 @@ function ProvidersWrapper({ children }: { children: ReactNode }) {
+@@ -699,6 +700,7 @@ function ProvidersWrapper({ children }: { children: ReactNode }) {
      <AppearanceProvider>
        <VoiceProvider>
          <DesktopWindowControlsSync />
@@ -372,7 +372,7 @@ index 000000000..ce292612d
 +  return null;
 +}
 diff --git a/packages/app/src/hooks/use-settings/storage.test.ts b/packages/app/src/hooks/use-settings/storage.test.ts
-index dadb912a2..b3b3a0831 100644
+index 323868280..fdd6fed71 100644
 --- a/packages/app/src/hooks/use-settings/storage.test.ts
 +++ b/packages/app/src/hooks/use-settings/storage.test.ts
 @@ -226,6 +226,20 @@ describe("loadAppSettingsFromStorage", () => {
@@ -397,10 +397,10 @@ index dadb912a2..b3b3a0831 100644
      const deps = makeDeps();
  
 diff --git a/packages/app/src/hooks/use-settings/storage.ts b/packages/app/src/hooks/use-settings/storage.ts
-index 4fe08bb6d..e923666f8 100644
+index d3b918755..aba8bd804 100644
 --- a/packages/app/src/hooks/use-settings/storage.ts
 +++ b/packages/app/src/hooks/use-settings/storage.ts
-@@ -103,6 +103,8 @@ export interface AppSettings {
+@@ -104,6 +104,8 @@ export interface AppSettings {
    toolCallDetailLevel: ToolCallDetailLevel;
    chatOutlineEnabled: boolean;
    vimKeybindings: boolean;
@@ -409,7 +409,7 @@ index 4fe08bb6d..e923666f8 100644
    filePanelAssociations: Record<string, string>;
    /** Desktop-only preferences for implicit opens into the ordinary side pane. */
    openInSidePane: OpenInSidePanePreferences;
-@@ -159,6 +161,7 @@ export const DEFAULT_CLIENT_SETTINGS: AppSettings = {
+@@ -161,6 +163,7 @@ export const DEFAULT_CLIENT_SETTINGS: AppSettings = {
    toolCallDetailLevel: "detailed",
    chatOutlineEnabled: true,
    vimKeybindings: false,
@@ -417,7 +417,7 @@ index 4fe08bb6d..e923666f8 100644
    filePanelAssociations: {},
    openInSidePane: DEFAULT_OPEN_IN_SIDE_PANE_PREFERENCES,
    pullRequestOpenLocation: "explorer",
-@@ -260,6 +263,7 @@ const StoredAppSettingsSchema = z
+@@ -263,6 +266,7 @@ const StoredAppSettingsSchema = z
      compactToolCalls: z.boolean().optional().catch(undefined),
      chatOutlineEnabled: z.boolean().catch(true),
      vimKeybindings: z.boolean().catch(false),
@@ -426,10 +426,10 @@ index 4fe08bb6d..e923666f8 100644
      openInSidePane: z
        .object({
 diff --git a/packages/app/src/i18n/resources/ar.ts b/packages/app/src/i18n/resources/ar.ts
-index f10874afe..49ffc9449 100644
+index b431ecb17..2ae82b8bd 100644
 --- a/packages/app/src/i18n/resources/ar.ts
 +++ b/packages/app/src/i18n/resources/ar.ts
-@@ -2288,6 +2288,22 @@ export const ar: TranslationResources = {
+@@ -2277,6 +2277,22 @@ export const ar: TranslationResources = {
      general: {
        title: "عام",
        sending: "الإرسال",
@@ -453,10 +453,10 @@ index f10874afe..49ffc9449 100644
          title: "بيانات المتصفح",
          siteData: "ملفات تعريف الارتباط وبيانات المواقع",
 diff --git a/packages/app/src/i18n/resources/en.ts b/packages/app/src/i18n/resources/en.ts
-index a9fb51c35..b85c522ee 100644
+index d883a3a03..636fba812 100644
 --- a/packages/app/src/i18n/resources/en.ts
 +++ b/packages/app/src/i18n/resources/en.ts
-@@ -2377,6 +2377,22 @@ export const en = {
+@@ -2366,6 +2366,22 @@ export const en = {
      general: {
        title: "General",
        sending: "Sending",
@@ -480,10 +480,10 @@ index a9fb51c35..b85c522ee 100644
          title: "Browser data",
          siteData: "Cookies and site data",
 diff --git a/packages/app/src/i18n/resources/es.ts b/packages/app/src/i18n/resources/es.ts
-index cca265167..3ffac8211 100644
+index 2b9c1ad47..8e32d53e4 100644
 --- a/packages/app/src/i18n/resources/es.ts
 +++ b/packages/app/src/i18n/resources/es.ts
-@@ -2300,6 +2300,22 @@ export const es: TranslationResources = {
+@@ -2289,6 +2289,22 @@ export const es: TranslationResources = {
      general: {
        title: "General",
        sending: "Envío",
@@ -507,10 +507,10 @@ index cca265167..3ffac8211 100644
          title: "Datos del navegador",
          siteData: "Cookies y datos de sitios",
 diff --git a/packages/app/src/i18n/resources/fr.ts b/packages/app/src/i18n/resources/fr.ts
-index e96c57ef4..edb5c78dc 100644
+index 1d28064c3..bfb60357c 100644
 --- a/packages/app/src/i18n/resources/fr.ts
 +++ b/packages/app/src/i18n/resources/fr.ts
-@@ -2300,6 +2300,22 @@ export const fr: TranslationResources = {
+@@ -2289,6 +2289,22 @@ export const fr: TranslationResources = {
      general: {
        title: "Général",
        sending: "Envoi",
@@ -534,10 +534,10 @@ index e96c57ef4..edb5c78dc 100644
          title: "Données du navigateur",
          siteData: "Cookies et données des sites",
 diff --git a/packages/app/src/i18n/resources/ja.ts b/packages/app/src/i18n/resources/ja.ts
-index b144bb4cf..feb88d57b 100644
+index bce05aada..6ee83685e 100644
 --- a/packages/app/src/i18n/resources/ja.ts
 +++ b/packages/app/src/i18n/resources/ja.ts
-@@ -2273,6 +2273,22 @@ export const ja: TranslationResources = {
+@@ -2262,6 +2262,22 @@ export const ja: TranslationResources = {
      general: {
        title: "一般",
        sending: "送信",
@@ -561,10 +561,10 @@ index b144bb4cf..feb88d57b 100644
          title: "ブラウザーデータ",
          siteData: "Cookie とサイトデータ",
 diff --git a/packages/app/src/i18n/resources/ko.ts b/packages/app/src/i18n/resources/ko.ts
-index 9de77e65a..196846279 100644
+index 00107f47c..646f952dd 100644
 --- a/packages/app/src/i18n/resources/ko.ts
 +++ b/packages/app/src/i18n/resources/ko.ts
-@@ -2262,6 +2262,22 @@ export const ko: TranslationResources = {
+@@ -2251,6 +2251,22 @@ export const ko: TranslationResources = {
      general: {
        title: "일반",
        sending: "전송",
@@ -588,10 +588,10 @@ index 9de77e65a..196846279 100644
          title: "브라우저 데이터",
          siteData: "쿠키 및 사이트 데이터",
 diff --git a/packages/app/src/i18n/resources/pt-BR.ts b/packages/app/src/i18n/resources/pt-BR.ts
-index fabdf336e..374b26fdd 100644
+index 49112e30f..17c159773 100644
 --- a/packages/app/src/i18n/resources/pt-BR.ts
 +++ b/packages/app/src/i18n/resources/pt-BR.ts
-@@ -2285,6 +2285,22 @@ export const ptBR: TranslationResources = {
+@@ -2274,6 +2274,22 @@ export const ptBR: TranslationResources = {
      general: {
        title: "Geral",
        sending: "Envio",
@@ -615,10 +615,10 @@ index fabdf336e..374b26fdd 100644
          title: "Dados do navegador",
          siteData: "Cookies e dados de sites",
 diff --git a/packages/app/src/i18n/resources/ru.ts b/packages/app/src/i18n/resources/ru.ts
-index 516463cb9..6a6c5d4fd 100644
+index 473b12a26..317606486 100644
 --- a/packages/app/src/i18n/resources/ru.ts
 +++ b/packages/app/src/i18n/resources/ru.ts
-@@ -2286,6 +2286,22 @@ export const ru: TranslationResources = {
+@@ -2274,6 +2274,22 @@ export const ru: TranslationResources = {
      general: {
        title: "Основные",
        sending: "Отправка",
@@ -642,10 +642,10 @@ index 516463cb9..6a6c5d4fd 100644
          title: "Данные браузера",
          siteData: "Файлы cookie и данные сайтов",
 diff --git a/packages/app/src/i18n/resources/zh-CN.ts b/packages/app/src/i18n/resources/zh-CN.ts
-index 261c82531..211b1c61c 100644
+index aef5340f8..4d63c1145 100644
 --- a/packages/app/src/i18n/resources/zh-CN.ts
 +++ b/packages/app/src/i18n/resources/zh-CN.ts
-@@ -2229,6 +2229,22 @@ export const zhCN: TranslationResources = {
+@@ -2218,6 +2218,22 @@ export const zhCN: TranslationResources = {
      general: {
        title: "通用",
        sending: "发送",
@@ -669,7 +669,7 @@ index 261c82531..211b1c61c 100644
          title: "浏览器数据",
          siteData: "Cookie 和网站数据",
 diff --git a/packages/app/src/screens/settings-screen.tsx b/packages/app/src/screens/settings-screen.tsx
-index b90f5ccd2..5ffb57c1d 100644
+index 3e3a4ef55..f9252f59d 100644
 --- a/packages/app/src/screens/settings-screen.tsx
 +++ b/packages/app/src/screens/settings-screen.tsx
 @@ -55,6 +55,7 @@ import { TerminalSection } from "@/screens/settings/terminal/terminal-section";
@@ -680,7 +680,7 @@ index b90f5ccd2..5ffb57c1d 100644
  import {
    useAppSettings,
    useSettings,
-@@ -1352,6 +1353,7 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
+@@ -1384,6 +1385,7 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
              <>
                <GeneralSection settings={settings} handleLanguageChange={handleLanguageChange} />
                <SendingSection />
