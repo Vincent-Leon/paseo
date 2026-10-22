@@ -13,3 +13,4 @@ packages/server src/server/plugins/usage-sources/index.test.ts
 plugins kimi-usage-source/server/usage.test.ts
 plugins minimax-usage-source/server/usage.test.ts
 plugins cursor-usage-source/server/usage.test.ts
+packages/app src/stores/sidebar-collapsed-sections-store/state.test.ts

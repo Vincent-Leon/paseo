@@ -1,0 +1,384 @@
+From da549676f831c11cd7ba3bce5fc604a918db86ec Mon Sep 17 00:00:00 2001
+From: Vincent Leon <leon@mbp.com>
+Date: Thu, 22 Oct 2026 17:59:15 +0800
+Subject: [PATCH] feat(app): fold earlier activity groups under one heading
+
+In activity grouping, the groups for work finished before the window now
+sit under an Earlier heading. Its trailing button collapses every project
+group at once, or expands them all once they are all collapsed.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../sidebar/sidebar-status-list.tsx           | 85 ++++++++++++++++---
+ packages/app/src/i18n/resources/ar.ts         |  5 ++
+ packages/app/src/i18n/resources/en.ts         |  5 ++
+ packages/app/src/i18n/resources/es.ts         |  5 ++
+ packages/app/src/i18n/resources/fr.ts         |  5 ++
+ packages/app/src/i18n/resources/ja.ts         |  5 ++
+ packages/app/src/i18n/resources/ko.ts         |  5 ++
+ packages/app/src/i18n/resources/pt-BR.ts      |  5 ++
+ packages/app/src/i18n/resources/ru.ts         |  5 ++
+ packages/app/src/i18n/resources/zh-CN.ts      |  5 ++
+ .../sidebar-collapsed-sections-store/index.ts |  4 +
+ .../state.test.ts                             | 16 ++++
+ .../sidebar-collapsed-sections-store/state.ts | 16 ++++
+ 13 files changed, 154 insertions(+), 12 deletions(-)
+
+diff --git a/packages/app/src/components/sidebar/sidebar-status-list.tsx b/packages/app/src/components/sidebar/sidebar-status-list.tsx
+index f2b5c8f27..230bd4813 100644
+--- a/packages/app/src/components/sidebar/sidebar-status-list.tsx
++++ b/packages/app/src/components/sidebar/sidebar-status-list.tsx
+@@ -1,4 +1,5 @@
+ import {
++  Fragment,
+   memo,
+   useCallback,
+   useMemo,
+@@ -34,11 +35,15 @@ import { withUnistyles } from "react-native-unistyles";
+ import {
+   ChevronDown,
+   ChevronRight,
++  ChevronsDownUp,
++  ChevronsUpDown,
+   CircleAlert,
+   CircleCheck,
+   CircleDot,
+   CircleX,
+ } from "lucide-react-native";
++import { DensityIcon } from "@/components/ui/density-icon";
++import { ToolbarButton } from "@/components/ui/pane-content-toolbar";
+ import { useToast } from "@/contexts/toast-context";
+ import { WorkspaceRenameModal } from "@/components/workspace-rename-modal";
+ import { useWorkspaceClipboardActions } from "@/hooks/use-workspace-clipboard-actions";
+@@ -300,26 +305,82 @@ function StatusGroupList({
+   supportsPinningByServerId: ReadonlyMap<string, boolean>;
+   onToggleWorkspacePin: ToggleSidebarWorkspacePin;
+ }) {
++  // Activity grouping ends with one group per project for work finished before its window.
++  // Those sit under one Earlier heading that folds or unfolds all of them at once.
++  const earlierGroupKeys = useMemo(
++    () => groups.filter((group) => group.leading.kind === "project").map((group) => group.key),
++    [groups],
++  );
++  const firstEarlierKey = earlierGroupKeys[0] ?? null;
+   return (
+     <>
+       {groups.map((group) => (
+-        <StatusGroupRows
+-          key={group.key}
+-          group={group}
+-          collapsed={collapsedWorkspaceGroupKeys.has(group.key)}
+-          projectIconByProjectViewKey={projectIconByProjectViewKey}
+-          shortcutIndex={shortcutIndex}
+-          showShortcutBadges={showShortcutBadges}
+-          onWorkspacePress={onWorkspacePress}
+-          hostBadgeByServerId={hostBadgeByServerId}
+-          supportsPinningByServerId={supportsPinningByServerId}
+-          onToggleWorkspacePin={onToggleWorkspacePin}
+-        />
++        <Fragment key={group.key}>
++          {group.key === firstEarlierKey ? (
++            <EarlierGroupsHeader
++              groupKeys={earlierGroupKeys}
++              collapsedWorkspaceGroupKeys={collapsedWorkspaceGroupKeys}
++            />
++          ) : null}
++          <StatusGroupRows
++            group={group}
++            collapsed={collapsedWorkspaceGroupKeys.has(group.key)}
++            projectIconByProjectViewKey={projectIconByProjectViewKey}
++            shortcutIndex={shortcutIndex}
++            showShortcutBadges={showShortcutBadges}
++            onWorkspacePress={onWorkspacePress}
++            hostBadgeByServerId={hostBadgeByServerId}
++            supportsPinningByServerId={supportsPinningByServerId}
++            onToggleWorkspacePin={onToggleWorkspacePin}
++          />
++        </Fragment>
+       ))}
+     </>
+   );
+ }
+ 
++function EarlierGroupsHeader({
++  groupKeys,
++  collapsedWorkspaceGroupKeys,
++}: {
++  groupKeys: readonly string[];
++  collapsedWorkspaceGroupKeys: ReadonlySet<string>;
++}) {
++  const { t } = useTranslation();
++  const setWorkspaceGroupsCollapsed = useSidebarCollapsedSectionsStore(
++    (state) => state.setWorkspaceGroupsCollapsed,
++  );
++  // Expand only once everything is folded; any open group means the next press folds them all.
++  const allCollapsed = groupKeys.every((key) => collapsedWorkspaceGroupKeys.has(key));
++  const handlePress = useCallback(
++    () => setWorkspaceGroupsCollapsed(groupKeys, !allCollapsed),
++    [allCollapsed, groupKeys, setWorkspaceGroupsCollapsed],
++  );
++  return (
++    <SidebarSectionHeader
++      title={t("sidebar.activity.earlier.title")}
++      testID="sidebar-activity-earlier"
++    >
++      <ToolbarButton
++        label={
++          allCollapsed
++            ? t("sidebar.activity.earlier.expandAll")
++            : t("sidebar.activity.earlier.collapseAll")
++        }
++        compact
++        onPress={handlePress}
++        testID="sidebar-activity-earlier-toggle"
++      >
++        <DensityIcon
++          icon={allCollapsed ? ChevronsUpDown : ChevronsDownUp}
++          size="xs"
++          color="foregroundMuted"
++        />
++      </ToolbarButton>
++    </SidebarSectionHeader>
++  );
++}
++
+ function StatusGroupRows({
+   group,
+   collapsed,
+diff --git a/packages/app/src/i18n/resources/ar.ts b/packages/app/src/i18n/resources/ar.ts
+index 1a2a0cac2..b431ecb17 100644
+--- a/packages/app/src/i18n/resources/ar.ts
++++ b/packages/app/src/i18n/resources/ar.ts
+@@ -1164,6 +1164,11 @@ export const ar: TranslationResources = {
+         twelveHours: "تم خلال آخر 12 ساعة",
+         today: "تم اليوم",
+       },
++      earlier: {
++        title: "أقدم",
++        collapseAll: "طي الكل",
++        expandAll: "توسيع الكل",
++      },
+     },
+     display: {
+       showBackground: "إظهار مساحات العمل في الخلفية",
+diff --git a/packages/app/src/i18n/resources/en.ts b/packages/app/src/i18n/resources/en.ts
+index 92dccc31f..d883a3a03 100644
+--- a/packages/app/src/i18n/resources/en.ts
++++ b/packages/app/src/i18n/resources/en.ts
+@@ -1172,6 +1172,11 @@ export const en = {
+         twelveHours: "Done in the last 12 hours",
+         today: "Done today",
+       },
++      earlier: {
++        title: "Earlier",
++        collapseAll: "Collapse all",
++        expandAll: "Expand all",
++      },
+     },
+     display: {
+       showBackground: "Show background",
+diff --git a/packages/app/src/i18n/resources/es.ts b/packages/app/src/i18n/resources/es.ts
+index 3126734bf..2b9c1ad47 100644
+--- a/packages/app/src/i18n/resources/es.ts
++++ b/packages/app/src/i18n/resources/es.ts
+@@ -1200,6 +1200,11 @@ export const es: TranslationResources = {
+         twelveHours: "Terminado en las últimas 12 horas",
+         today: "Terminado hoy",
+       },
++      earlier: {
++        title: "Anteriores",
++        collapseAll: "Contraer todo",
++        expandAll: "Expandir todo",
++      },
+     },
+     display: {
+       showBackground: "Mostrar espacios en segundo plano",
+diff --git a/packages/app/src/i18n/resources/fr.ts b/packages/app/src/i18n/resources/fr.ts
+index b7c4d6d28..1d28064c3 100644
+--- a/packages/app/src/i18n/resources/fr.ts
++++ b/packages/app/src/i18n/resources/fr.ts
+@@ -1193,6 +1193,11 @@ export const fr: TranslationResources = {
+         twelveHours: "Terminé ces 12 dernières heures",
+         today: "Terminé aujourd’hui",
+       },
++      earlier: {
++        title: "Plus ancien",
++        collapseAll: "Tout réduire",
++        expandAll: "Tout développer",
++      },
+     },
+     display: {
+       showBackground: "Afficher les espaces en arrière-plan",
+diff --git a/packages/app/src/i18n/resources/ja.ts b/packages/app/src/i18n/resources/ja.ts
+index 65734fa92..bce05aada 100644
+--- a/packages/app/src/i18n/resources/ja.ts
++++ b/packages/app/src/i18n/resources/ja.ts
+@@ -1177,6 +1177,11 @@ export const ja: TranslationResources = {
+         twelveHours: "過去12時間に完了",
+         today: "今日完了",
+       },
++      earlier: {
++        title: "それ以前",
++        collapseAll: "すべて折りたたむ",
++        expandAll: "すべて展開",
++      },
+     },
+     display: {
+       showBackground: "バックグラウンドを表示",
+diff --git a/packages/app/src/i18n/resources/ko.ts b/packages/app/src/i18n/resources/ko.ts
+index e9c539529..00107f47c 100644
+--- a/packages/app/src/i18n/resources/ko.ts
++++ b/packages/app/src/i18n/resources/ko.ts
+@@ -1171,6 +1171,11 @@ export const ko: TranslationResources = {
+         twelveHours: "최근 12시간 내 완료",
+         today: "오늘 완료",
+       },
++      earlier: {
++        title: "이전",
++        collapseAll: "모두 접기",
++        expandAll: "모두 펼치기",
++      },
+     },
+     display: {
+       showBackground: "백그라운드 표시",
+diff --git a/packages/app/src/i18n/resources/pt-BR.ts b/packages/app/src/i18n/resources/pt-BR.ts
+index 84731828b..49112e30f 100644
+--- a/packages/app/src/i18n/resources/pt-BR.ts
++++ b/packages/app/src/i18n/resources/pt-BR.ts
+@@ -1190,6 +1190,11 @@ export const ptBR: TranslationResources = {
+         twelveHours: "Concluído nas últimas 12 horas",
+         today: "Concluído hoje",
+       },
++      earlier: {
++        title: "Anteriores",
++        collapseAll: "Recolher tudo",
++        expandAll: "Expandir tudo",
++      },
+     },
+     display: {
+       showBackground: "Mostrar espaços em segundo plano",
+diff --git a/packages/app/src/i18n/resources/ru.ts b/packages/app/src/i18n/resources/ru.ts
+index 3caeb3d7e..473b12a26 100644
+--- a/packages/app/src/i18n/resources/ru.ts
++++ b/packages/app/src/i18n/resources/ru.ts
+@@ -1181,6 +1181,11 @@ export const ru: TranslationResources = {
+         twelveHours: "Готово за последние 12 часов",
+         today: "Готово сегодня",
+       },
++      earlier: {
++        title: "Ранее",
++        collapseAll: "Свернуть все",
++        expandAll: "Развернуть все",
++      },
+     },
+     display: {
+       showBackground: "Показать фоновые пространства",
+diff --git a/packages/app/src/i18n/resources/zh-CN.ts b/packages/app/src/i18n/resources/zh-CN.ts
+index aea62ae63..aef5340f8 100644
+--- a/packages/app/src/i18n/resources/zh-CN.ts
++++ b/packages/app/src/i18n/resources/zh-CN.ts
+@@ -1156,6 +1156,11 @@ export const zhCN: TranslationResources = {
+         twelveHours: "最近 12 小时完成",
+         today: "今天完成",
+       },
++      earlier: {
++        title: "更早",
++        collapseAll: "全部收起",
++        expandAll: "全部展开",
++      },
+     },
+     display: {
+       showBackground: "显示后台工作区",
+diff --git a/packages/app/src/stores/sidebar-collapsed-sections-store/index.ts b/packages/app/src/stores/sidebar-collapsed-sections-store/index.ts
+index bd24bed87..dd75cb50f 100644
+--- a/packages/app/src/stores/sidebar-collapsed-sections-store/index.ts
++++ b/packages/app/src/stores/sidebar-collapsed-sections-store/index.ts
+@@ -9,6 +9,7 @@ import {
+   PersistedCollapsedProjectsSchema,
+   serializeCollapsedProjects,
+   setProjectCollapsed,
++  setWorkspaceGroupsCollapsed,
+   togglePinnedCollapsed,
+   toggleProjectCollapsed,
+   toggleWorkspaceGroupCollapsed,
+@@ -18,6 +19,7 @@ interface SidebarCollapsedSectionsState extends CollapsedProjectsState {
+   toggleProjectCollapsed: (projectKey: string) => void;
+   setProjectCollapsed: (projectKey: string, collapsed: boolean) => void;
+   toggleWorkspaceGroupCollapsed: (workspaceGroupKey: string) => void;
++  setWorkspaceGroupsCollapsed: (workspaceGroupKeys: readonly string[], collapsed: boolean) => void;
+   togglePinnedCollapsed: () => void;
+ }
+ 
+@@ -33,6 +35,8 @@ export const useSidebarCollapsedSectionsStore = create<SidebarCollapsedSectionsS
+         set((state) => setProjectCollapsed(state, projectKey, collapsed)),
+       toggleWorkspaceGroupCollapsed: (workspaceGroupKey) =>
+         set((state) => toggleWorkspaceGroupCollapsed(state, workspaceGroupKey)),
++      setWorkspaceGroupsCollapsed: (workspaceGroupKeys, collapsed) =>
++        set((state) => setWorkspaceGroupsCollapsed(state, workspaceGroupKeys, collapsed)),
+       togglePinnedCollapsed: () => set((state) => togglePinnedCollapsed(state)),
+     }),
+     {
+diff --git a/packages/app/src/stores/sidebar-collapsed-sections-store/state.test.ts b/packages/app/src/stores/sidebar-collapsed-sections-store/state.test.ts
+index 6d88dff7c..fbb31cb45 100644
+--- a/packages/app/src/stores/sidebar-collapsed-sections-store/state.test.ts
++++ b/packages/app/src/stores/sidebar-collapsed-sections-store/state.test.ts
+@@ -4,6 +4,7 @@ import {
+   mergePersistedCollapsedProjects,
+   serializeCollapsedProjects,
+   setProjectCollapsed,
++  setWorkspaceGroupsCollapsed,
+   togglePinnedCollapsed,
+   toggleProjectCollapsed,
+   toggleWorkspaceGroupCollapsed,
+@@ -30,6 +31,21 @@ describe("sidebar collapsed projects transitions", () => {
+     expect(Array.from(state.collapsedWorkspaceGroupKeys)).toEqual(["running"]);
+   });
+ 
++  it("collapses and expands a set of groups at once, leaving the others alone", () => {
++    let state = toggleWorkspaceGroupCollapsed(emptyState(), "running");
++    const projectGroups = ["activity:project:a", "activity:project:b"];
++
++    state = setWorkspaceGroupsCollapsed(state, projectGroups, true);
++    expect(Array.from(state.collapsedWorkspaceGroupKeys).sort()).toEqual([
++      "activity:project:a",
++      "activity:project:b",
++      "running",
++    ]);
++
++    state = setWorkspaceGroupsCollapsed(state, projectGroups, false);
++    expect(Array.from(state.collapsedWorkspaceGroupKeys)).toEqual(["running"]);
++  });
++
+   it("serializes collapsed project keys for preference storage", () => {
+     const state: CollapsedProjectsState = {
+       collapsedProjectKeys: new Set(["project-a", "project-b"]),
+diff --git a/packages/app/src/stores/sidebar-collapsed-sections-store/state.ts b/packages/app/src/stores/sidebar-collapsed-sections-store/state.ts
+index cf92e600b..d04e8b309 100644
+--- a/packages/app/src/stores/sidebar-collapsed-sections-store/state.ts
++++ b/packages/app/src/stores/sidebar-collapsed-sections-store/state.ts
+@@ -52,6 +52,22 @@ export function toggleWorkspaceGroupCollapsed(
+   return { ...state, collapsedWorkspaceGroupKeys: next };
+ }
+ 
++export function setWorkspaceGroupsCollapsed(
++  state: CollapsedProjectsState,
++  workspaceGroupKeys: readonly string[],
++  collapsed: boolean,
++): CollapsedProjectsState {
++  const next = new Set(state.collapsedWorkspaceGroupKeys);
++  for (const key of workspaceGroupKeys) {
++    if (collapsed) {
++      next.add(key);
++    } else {
++      next.delete(key);
++    }
++  }
++  return { ...state, collapsedWorkspaceGroupKeys: next };
++}
++
+ export function setProjectCollapsed(
+   state: CollapsedProjectsState,
+   projectKey: string,
+-- 
+2.50.1 (Apple Git-155)
+
