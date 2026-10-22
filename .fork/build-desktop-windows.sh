@@ -32,8 +32,11 @@ rm -rf "$release_dir"
 
 (
   cd "$repo_dir"
+  # Upstream's target lists x64 and arm64, which --x64 does not narrow; that build also emits a
+  # two-architecture installer that latest.yml points at. A bare nsis target takes the CLI arch.
   npm run build:desktop -- \
     --publish never --win --x64 \
+    -c.win.target=nsis \
     "-c.publish.owner=$owner" \
     "-c.publish.repo=$repo" \
     -c.publish.releaseType=release \
@@ -76,7 +79,7 @@ echo "ok: app-update.yml updates from $owner/$repo and requires signer $publishe
 manifest="$release_dir/latest.yml"
 grep -qx "version: $version" "$manifest" || fail "latest.yml is not version $version"
 installer_sha512="$(openssl dgst -sha512 -binary "$release_dir/$installer" | base64 | tr -d '\n')"
-grep -q "url: $installer" "$manifest" || fail "latest.yml does not list $installer"
+grep -qx "path: $installer" "$manifest" || fail "latest.yml does not point the updater at $installer"
 grep -qF "sha512: $installer_sha512" "$manifest" || fail "latest.yml sha512 does not match $installer"
 echo "ok: latest.yml lists $installer with a matching sha512"
 
