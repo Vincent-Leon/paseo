@@ -1,0 +1,68 @@
+From 1dbbd27cf5f2be5bed7379a3c77eed94338e8325 Mon Sep 17 00:00:00 2001
+From: Vincent Leon <leon@mbp.com>
+Date: Thu, 22 Oct 2026 22:57:29 +0800
+Subject: [PATCH 6/7] feat(android): let the app rotate with the device
+
+The app locks to portrait, which also locks an unfolded foldable or a
+tablet, including the Android build running under HarmonyOS's Android
+compatibility layer. The layout already switches to the wide form factor
+by width, so set the main activity to fullUser: it rotates with the
+device unless rotation lock is on. iOS keeps its configuration.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ packages/app/app.config.js                    |  2 ++
+ .../plugins/with-android-user-orientation.js  | 21 +++++++++++++++++++
+ 2 files changed, 23 insertions(+)
+ create mode 100644 packages/app/plugins/with-android-user-orientation.js
+
+diff --git a/packages/app/app.config.js b/packages/app/app.config.js
+index 7ddfc9502..9f92cce90 100644
+--- a/packages/app/app.config.js
++++ b/packages/app/app.config.js
+@@ -4,6 +4,7 @@ const pkg = require("./package.json");
+ const withAndroidAsyncStorageSize = require("./plugins/with-android-async-storage-size");
+ const withAndroidOptionalCamera = require("./plugins/with-android-optional-camera");
+ const withAndroidProfileable = require("./plugins/with-android-profileable");
++const withAndroidUserOrientation = require("./plugins/with-android-user-orientation");
+ const withFdroidAutolinking = require("./plugins/with-fdroid-autolinking");
+ const withPasteInput = require("./plugins/with-paste-input");
+ const withAndroidScroll = require("./modules/paseo-scroll/app.plugin");
+@@ -148,6 +149,7 @@ export default {
+       [withAndroidAsyncStorageSize, 64],
+       ...buildProfile.cameraPlugins,
+       withAndroidOptionalCamera,
++      withAndroidUserOrientation,
+       [
+         "expo-splash-screen",
+         {
+diff --git a/packages/app/plugins/with-android-user-orientation.js b/packages/app/plugins/with-android-user-orientation.js
+new file mode 100644
+index 000000000..d9ca3d518
+--- /dev/null
++++ b/packages/app/plugins/with-android-user-orientation.js
+@@ -0,0 +1,21 @@
++const { withAndroidManifest } = require("expo/config-plugins");
++
++// `orientation: "portrait"` locks the Android activity to portrait, which also locks an unfolded
++// foldable or a tablet, including the Android build running under HarmonyOS's compatibility layer.
++// The layout already switches to the wide form factor by width, so let the activity follow the
++// device: `fullUser` rotates unless the user has turned rotation lock on.
++function withAndroidUserOrientation(config) {
++  return withAndroidManifest(config, (modConfig) => {
++    const activities = modConfig.modResults.manifest.application?.[0]?.activity ?? [];
++    const mainActivity = activities.find(
++      (activity) => activity.$["android:name"] === ".MainActivity",
++    );
++    if (!mainActivity) {
++      throw new Error("Could not set the Android orientation without a MainActivity entry");
++    }
++    mainActivity.$["android:screenOrientation"] = "fullUser";
++    return modConfig;
++  });
++}
++
++module.exports = withAndroidUserOrientation;
+-- 
+2.50.1 (Apple Git-155)
+
