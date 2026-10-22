@@ -391,14 +391,15 @@ jobs:
           NODE_OPTIONS: --max-old-space-size=8192
         run: bash fork/.fork/build-desktop-windows.sh upstream "$(cygpath -u "$RUNNER_TEMP")/release"
 
-      # -DeleteKey exists only in Windows PowerShell's certificate provider, not in pwsh.
+      # -DeleteKey is a dynamic parameter of the certificate provider: it binds only when
+      # Remove-Item gets a Cert: path, not when certificates are piped in.
       - name: Remove signing key
         if: always()
         shell: powershell
         run: |
           Get-ChildItem Cert:\CurrentUser\My |
             Where-Object Subject -eq "CN=Paseo Fork Signing" |
-            Remove-Item -DeleteKey
+            ForEach-Object { Remove-Item -Path "Cert:\CurrentUser\My\$($_.Thumbprint)" -DeleteKey }
 
       - name: Upload smoke diagnostics
         if: failure()
