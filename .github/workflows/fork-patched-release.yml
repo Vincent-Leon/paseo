@@ -391,9 +391,10 @@ jobs:
           NODE_OPTIONS: --max-old-space-size=8192
         run: bash fork/.fork/build-desktop-windows.sh upstream "$(cygpath -u "$RUNNER_TEMP")/release"
 
+      # -DeleteKey exists only in Windows PowerShell's certificate provider, not in pwsh.
       - name: Remove signing key
         if: always()
-        shell: pwsh
+        shell: powershell
         run: |
           Get-ChildItem Cert:\CurrentUser\My |
             Where-Object Subject -eq "CN=Paseo Fork Signing" |
