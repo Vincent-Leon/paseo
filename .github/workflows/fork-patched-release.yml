@@ -1,7 +1,8 @@
-# Builds getpaseo/paseo's latest stable release with the patches in .fork/patches,
-# signs it with the fork certificate once a reviewer approves the fork-release
-# environment, and publishes it as this fork's latest release so the patched desktop
-# app updates from here. Design, security model and maintenance: .fork/README.md.
+# Builds getpaseo/paseo's latest stable release with the patches in .fork/patches for
+# macOS arm64 and Windows x64, signs both with the fork certificate once a reviewer
+# approves the fork-release environment, and publishes them as this fork's latest release
+# so the patched desktop app updates from here. Design, security model and maintenance:
+# .fork/README.md.
 name: Fork patched release
 
 on:
@@ -18,6 +19,11 @@ on:
         description: "Rebuild even if the fork already has this release; its assets are replaced in place."
         required: false
         default: false
+        type: boolean
+      publish:
+        description: "Publish a release. Off: build and sign only, keep the installers as run artifacts, and also accept upstream prerelease tags."
+        required: false
+        default: true
         type: boolean
 
 permissions: {}
@@ -43,6 +49,7 @@ jobs:
       version: ${{ steps.resolve.outputs.version }}
       build: ${{ steps.resolve.outputs.build }}
       latest: ${{ steps.resolve.outputs.latest }}
+      publish: ${{ steps.resolve.outputs.publish }}
     steps:
       - name: Resolve upstream release
         id: resolve
@@ -50,29 +57,44 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           INPUT_TAG: ${{ inputs.upstream_tag }}
           INPUT_FORCE: ${{ inputs.force }}
+          INPUT_PUBLISH: ${{ inputs.publish }}
           SKIP_TAGS: ${{ vars.FORK_SKIP_TAGS }}
         run: |
           set -euo pipefail
+          # Scheduled runs have no inputs, so only an explicit false turns publishing off.
+          publish=true
+          [[ "$INPUT_PUBLISH" == "false" ]] && publish=false
           latest_tag="$(gh api "repos/$UPSTREAM_REPOSITORY/releases/latest" --jq .tag_name)"
           tag="${INPUT_TAG:-$latest_tag}"
-          if ! [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::'$tag' is not a stable vX.Y.Z tag"
+          # Only a stable release is ever published. A build-only run may also take an
+          # upstream prerelease, whose installers stay run artifacts that never update anyone.
+          if [[ "$publish" == "true" ]]; then
+            tag_pattern='^v[0-9]+\.[0-9]+\.[0-9]+$'
+            expected_state="false,false"
+          else
+            tag_pattern='^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'
+            expected_state="false,"
+          fi
+          if ! [[ "$tag" =~ $tag_pattern ]]; then
+            echo "::error::'$tag' is not a release tag this run may build (publish=$publish)"
             exit 1
           fi
-          # A manually chosen tag must also be a published stable upstream release.
+          # A manually chosen tag must also be a published upstream release.
           state="$(gh api "repos/$UPSTREAM_REPOSITORY/releases/tags/$tag" --jq '[.draft, .prerelease] | map(tostring) | join(",")')"
-          if [[ "$state" != "false,false" ]]; then
-            echo "::error::$tag is not a published stable release of $UPSTREAM_REPOSITORY"
+          if [[ "$state" != "$expected_state"* ]]; then
+            echo "::error::$tag is not a published release of $UPSTREAM_REPOSITORY this run may build (publish=$publish)"
             exit 1
           fi
 
           build=true
-          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 && [[ "$INPUT_FORCE" != "true" ]]; then
-            echo "The fork already has release $tag; nothing to do."
-            build=false
-          elif [[ -z "$INPUT_TAG" && " ${SKIP_TAGS:-} " == *" $tag "* ]]; then
-            echo "$tag is listed in the FORK_SKIP_TAGS variable; skipping the scheduled build."
-            build=false
+          if [[ "$publish" == "true" ]]; then
+            if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 && [[ "$INPUT_FORCE" != "true" ]]; then
+              echo "The fork already has release $tag; nothing to do."
+              build=false
+            elif [[ -z "$INPUT_TAG" && " ${SKIP_TAGS:-} " == *" $tag "* ]]; then
+              echo "$tag is listed in the FORK_SKIP_TAGS variable; skipping the scheduled build."
+              build=false
+            fi
           fi
 
           latest=false
@@ -82,8 +104,9 @@ jobs:
             echo "version=${tag#v}"
             echo "build=$build"
             echo "latest=$latest"
+            echo "publish=$publish"
           } >> "$GITHUB_OUTPUT"
-          echo "Upstream $tag (latest upstream: $latest_tag), build=$build"
+          echo "Upstream $tag (latest upstream: $latest_tag), build=$build, publish=$publish"
 
   # Runs upstream code with no secrets and a read-only token.
   build:
@@ -179,12 +202,12 @@ jobs:
           fi
           echo "stage=$stage" >> "$GITHUB_OUTPUT"
 
-  # The only job that can read the signing key. The fork-release environment holds
-  # it as an environment secret and requires a reviewer to approve every run.
-  # Signing happens inside electron-builder, before it writes the dmg, zip and the
-  # sha512 in latest-mac.yml, so this job rebuilds instead of re-signing artifacts
-  # from the build job (re-signing would mean regenerating all three by hand).
-  sign:
+  # The two sign jobs are the only ones that can read the signing key. The fork-release
+  # environment holds it as an environment secret and requires a reviewer to approve every
+  # run; one approval covers both. Signing happens inside electron-builder, before it writes
+  # the installers and the sha512 in the update manifests, so these jobs rebuild instead of
+  # re-signing the build job's output (that would mean regenerating all of it by hand).
+  sign-macos:
     needs: [resolve, build]
     if: github.repository == 'Vincent-Leon/paseo'
     runs-on: macos-15
@@ -269,7 +292,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: desktop-smoke
+          name: desktop-smoke-macos
           path: ${{ runner.temp }}/desktop-smoke
           if-no-files-found: ignore
           retention-days: 7
@@ -277,17 +300,128 @@ jobs:
       - name: Upload release files
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: fork-release
+          name: fork-release-macos
           path: ${{ runner.temp }}/release
           if-no-files-found: error
           compression-level: 0
-          retention-days: 3
+          retention-days: 7
+
+  sign-windows:
+    needs: [resolve, build]
+    if: github.repository == 'Vincent-Leon/paseo'
+    runs-on: windows-latest
+    timeout-minutes: 90
+    environment: fork-release
+    permissions:
+      contents: read
+    outputs:
+      started: ${{ steps.started.outputs.started }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Mark job started
+        id: started
+        run: echo "started=true" >> "$GITHUB_OUTPUT"
+
+      # The runner checks out with CRLF by default, which would make `git am` and the tree
+      # hash disagree with the tested tree.
+      - name: Keep line endings as committed
+        run: git config --global core.autocrlf false && git config --global core.longpaths true
+
+      - name: Check out fork tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: fork
+          persist-credentials: false
+
+      - name: Check out upstream release
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: getpaseo/paseo
+          ref: refs/tags/${{ needs.resolve.outputs.tag }}
+          path: upstream
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+
+      - name: Apply fork patches
+        env:
+          TESTED_TREE: ${{ needs.build.outputs.tree }}
+        run: |
+          set -euo pipefail
+          tree="$(bash fork/.fork/prepare-source.sh upstream | sed -n 's/^tree: //p')"
+          if [ -z "$TESTED_TREE" ] || [ "$tree" != "$TESTED_TREE" ]; then
+            echo "::error::Patched tree $tree is not the tested tree '$TESTED_TREE'"
+            exit 1
+          fi
+
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+          package-manager-cache: false
+
+      - name: Install dependencies
+        working-directory: upstream
+        run: node scripts/npm-retry.mjs ci
+
+      # Without -Exportable the private key cannot leave the store. The secret exists only in
+      # this step's environment; later steps sign through the store by thumbprint.
+      - name: Import signing key
+        shell: pwsh
+        env:
+          FORK_SIGNING_P12_BASE64: ${{ secrets.FORK_SIGNING_P12_BASE64 }}
+          FORK_SIGN_P12_PASSWORD: ${{ secrets.FORK_SIGNING_P12_PASSWORD }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $pfx = Join-Path $env:RUNNER_TEMP "fork-signing.p12"
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:FORK_SIGNING_P12_BASE64))
+          $password = ConvertTo-SecureString $env:FORK_SIGN_P12_PASSWORD -AsPlainText -Force
+          $cert = Import-PfxCertificate -FilePath $pfx -CertStoreLocation Cert:\CurrentUser\My -Password $password
+          Remove-Item $pfx
+          Write-Output "signing identity $($cert.Thumbprint) imported"
+
+      - name: Build, sign and verify
+        env:
+          FORK_EXPECTED_VERSION: ${{ needs.resolve.outputs.version }}
+          # Launches the packaged app against an isolated daemon, proving it starts.
+          PASEO_DESKTOP_SMOKE: "1"
+          PASEO_DESKTOP_SMOKE_ARTIFACT_DIR: ${{ runner.temp }}/desktop-smoke
+          NODE_OPTIONS: --max-old-space-size=8192
+        run: bash fork/.fork/build-desktop-windows.sh upstream "$(cygpath -u "$RUNNER_TEMP")/release"
+
+      - name: Remove signing key
+        if: always()
+        shell: pwsh
+        run: |
+          Get-ChildItem Cert:\CurrentUser\My |
+            Where-Object Subject -eq "CN=Paseo Fork Signing" |
+            Remove-Item -DeleteKey
+
+      - name: Upload smoke diagnostics
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: desktop-smoke-windows
+          path: ${{ runner.temp }}/desktop-smoke
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Upload release files
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fork-release-windows
+          path: ${{ runner.temp }}/release
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
 
   # Holds the write token and runs no upstream code: it only uploads the signed files.
   # The tag is created with GITHUB_TOKEN, so it starts no other workflow.
   publish:
-    needs: [resolve, build, sign]
-    if: github.repository == 'Vincent-Leon/paseo'
+    needs: [resolve, build, sign-macos, sign-windows]
+    if: github.repository == 'Vincent-Leon/paseo' && needs.resolve.outputs.publish == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -296,7 +430,8 @@ jobs:
       - name: Download release files
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: fork-release
+          pattern: fork-release-*
+          merge-multiple: true
           path: release
 
       - name: Publish release
@@ -309,7 +444,11 @@ jobs:
         run: |
           set -euo pipefail
           base="Paseo-$VERSION-arm64"
-          files=("$base.dmg" "$base.dmg.blockmap" "$base.zip" "$base.zip.blockmap" "latest-mac.yml")
+          installer="Paseo-Setup-$VERSION-x64.exe"
+          files=(
+            "$base.dmg" "$base.dmg.blockmap" "$base.zip" "$base.zip.blockmap" "latest-mac.yml"
+            "$installer" "$installer.blockmap" "latest.yml"
+          )
           cd release
           for file in "${files[@]}"; do
             [ -f "$file" ] || { echo "::error::Missing $file"; exit 1; }
@@ -319,11 +458,13 @@ jobs:
             find . -type f
             exit 1
           fi
-          grep -qx "version: $VERSION" latest-mac.yml || { echo "::error::latest-mac.yml is not $VERSION"; exit 1; }
+          for manifest in latest-mac.yml latest.yml; do
+            grep -qx "version: $VERSION" "$manifest" || { echo "::error::$manifest is not $VERSION"; exit 1; }
+          done
 
           notes="$RUNNER_TEMP/notes.md"
           {
-            echo "Patched build of [getpaseo/paseo $TAG](https://github.com/$UPSTREAM_REPOSITORY/releases/tag/$TAG) for macOS arm64."
+            echo "Patched build of [getpaseo/paseo $TAG](https://github.com/$UPSTREAM_REPOSITORY/releases/tag/$TAG) for macOS arm64 and Windows x64."
             echo
             echo "Self-signed with the fork certificate and not notarized; see .fork/README.md on the default branch."
             echo
@@ -372,8 +513,8 @@ jobs:
   # closes it once that tag is published. A rejected approval is a decision, not a
   # failure, and reports nothing.
   report:
-    needs: [resolve, build, sign, publish]
-    if: always() && github.repository == 'Vincent-Leon/paseo' && needs.resolve.outputs.build == 'true'
+    needs: [resolve, build, sign-macos, sign-windows, publish]
+    if: always() && github.repository == 'Vincent-Leon/paseo' && needs.resolve.outputs.build == 'true' && needs.resolve.outputs.publish == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -384,8 +525,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.resolve.outputs.tag }}
           BUILD_RESULT: ${{ needs.build.result }}
-          SIGN_RESULT: ${{ needs.sign.result }}
-          SIGN_STARTED: ${{ needs.sign.outputs.started }}
+          SIGN_MACOS_RESULT: ${{ needs.sign-macos.result }}
+          SIGN_MACOS_STARTED: ${{ needs.sign-macos.outputs.started }}
+          SIGN_WINDOWS_RESULT: ${{ needs.sign-windows.result }}
+          SIGN_WINDOWS_STARTED: ${{ needs.sign-windows.outputs.started }}
           PUBLISH_RESULT: ${{ needs.publish.result }}
           BUILD_STAGE: ${{ needs.build.outputs.stage }}
           PATCH_LOG: ${{ needs.build.outputs.log }}
@@ -399,8 +542,10 @@ jobs:
           stage=""
           if [ "$BUILD_RESULT" = "failure" ]; then
             stage="${BUILD_STAGE:-the build job failed}"
-          elif [ "$SIGN_RESULT" = "failure" ] && [ "$SIGN_STARTED" = "true" ]; then
-            stage="building, signing or verifying the desktop app failed"
+          elif [ "$SIGN_MACOS_RESULT" = "failure" ] && [ "$SIGN_MACOS_STARTED" = "true" ]; then
+            stage="building, signing or verifying the macOS app failed"
+          elif [ "$SIGN_WINDOWS_RESULT" = "failure" ] && [ "$SIGN_WINDOWS_STARTED" = "true" ]; then
+            stage="building, signing or verifying the Windows app failed"
           elif [ "$PUBLISH_RESULT" = "failure" ]; then
             stage="publishing the release failed"
           fi
