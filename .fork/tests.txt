@@ -14,3 +14,4 @@ plugins kimi-usage-source/server/usage.test.ts
 plugins minimax-usage-source/server/usage.test.ts
 plugins cursor-usage-source/server/usage.test.ts
 packages/app src/stores/sidebar-collapsed-sections-store/state.test.ts
+packages/app src/utils/os-notifications.test.ts
