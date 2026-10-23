@@ -1,7 +1,7 @@
-From b1cddc53c38997e7bed0a9c61f878ab9a8583924 Mon Sep 17 00:00:00 2001
+From af93c7895421e190f64441e6672786ec968f213e Mon Sep 17 00:00:00 2001
 From: Vincent Leon <leon@mbp.com>
 Date: Wed, 21 Oct 2026 14:47:35 +0800
-Subject: [PATCH 2/2] feat: preview the last thinking paragraph while a
+Subject: [PATCH 2/7] feat: preview the last thinking paragraph while a
  thinking group is collapsed
 
 Agents often end a thinking group with a short note to the user (what they
@@ -499,10 +499,10 @@ index 281f380f1..14aa2c764 100644
 +  });
  });
 diff --git a/packages/server/src/server/agent/providers/claude/agent.ts b/packages/server/src/server/agent/providers/claude/agent.ts
-index 9049a3a5c..6f6ce4349 100644
+index 365de4470..5aec5f9b2 100644
 --- a/packages/server/src/server/agent/providers/claude/agent.ts
 +++ b/packages/server/src/server/agent/providers/claude/agent.ts
-@@ -1197,6 +1197,26 @@ interface TimelineMessageState {
+@@ -1203,6 +1203,26 @@ interface TimelineMessageState {
    emittedAssistantLength: number;
    emittedReasoningLength: number;
    stopped: boolean;
@@ -529,7 +529,7 @@ index 9049a3a5c..6f6ce4349 100644
  }
  
  // An assistant message carries either a cumulative snapshot of the API message or, as the
-@@ -1207,14 +1227,14 @@ interface TimelineMessageState {
+@@ -1213,14 +1233,14 @@ interface TimelineMessageState {
  // messages on (always, in production) the stream deltas carry every block, so two identical
  // blocks are both shown. Without stream deltas, a block that matches the end of the text
  // before it cannot be told apart from a re-delivered snapshot and is not shown again.
@@ -546,7 +546,7 @@ index 9049a3a5c..6f6ce4349 100644
  }
  
  class TimelineAssembler {
-@@ -1292,7 +1312,7 @@ class TimelineAssembler {
+@@ -1298,7 +1318,7 @@ class TimelineAssembler {
      }
  
      if (eventType === "content_block_start") {
@@ -555,7 +555,7 @@ index 9049a3a5c..6f6ce4349 100644
      }
  
      if (eventType === "content_block_delta") {
-@@ -1302,6 +1322,27 @@ class TimelineAssembler {
+@@ -1308,6 +1328,27 @@ class TimelineAssembler {
      return [];
    }
  
@@ -583,7 +583,7 @@ index 9049a3a5c..6f6ce4349 100644
    private consumeDeltaContent(
      content: unknown,
      runId: string | null,
-@@ -1331,8 +1372,11 @@ class TimelineAssembler {
+@@ -1337,8 +1378,11 @@ class TimelineAssembler {
        if (fragment.kind === "assistant") {
          state.assistantText += fragment.text;
        } else {
@@ -596,7 +596,7 @@ index 9049a3a5c..6f6ce4349 100644
      }
      return this.emitNewContent(state);
    }
-@@ -1341,20 +1385,29 @@ class TimelineAssembler {
+@@ -1347,20 +1391,29 @@ class TimelineAssembler {
      state: TimelineMessageState,
      fragments: TimelineFragment[],
    ): AgentTimelineItem[] {
@@ -636,7 +636,7 @@ index 9049a3a5c..6f6ce4349 100644
      }
      return this.emitNewContent(state);
    }
-@@ -1410,6 +1463,9 @@ class TimelineAssembler {
+@@ -1416,6 +1469,9 @@ class TimelineAssembler {
        emittedAssistantLength: 0,
        emittedReasoningLength: 0,
        stopped: false,

@@ -1,7 +1,7 @@
-From adcd7fceba4476d8c65ce932d3f93ae0d8b4d9e9 Mon Sep 17 00:00:00 2001
+From 66fcec8069d53cc5397ee69de9d2d9546c736a59 Mon Sep 17 00:00:00 2001
 From: Vincent Leon <leon@mbp.com>
 Date: Thu, 22 Oct 2026 15:03:59 +0800
-Subject: [PATCH 4/4] feat(usage): tick each usage bar at the share of its
+Subject: [PATCH 4/7] feat(usage): tick each usage bar at the share of its
  window that has elapsed
 
 Usage windows carried how much was used and when they reset, but not how
@@ -705,10 +705,10 @@ index fa23ca9c9..2c2f7c883 100644
      [86400, "day", "d"],
      [3600, "hour", "h"],
 diff --git a/packages/protocol/src/messages.ts b/packages/protocol/src/messages.ts
-index e8df79eab..c56e681d5 100644
+index 4beaf0a0b..e09b416ea 100644
 --- a/packages/protocol/src/messages.ts
 +++ b/packages/protocol/src/messages.ts
-@@ -6275,6 +6275,12 @@ export const ProviderUsageWindowSchema = z.object({
+@@ -6321,6 +6321,12 @@ export const ProviderUsageWindowSchema = z.object({
    usedPct: z.number().nullable().optional(),
    remainingPct: z.number().nullable().optional(),
    resetsAt: z.string().nullable().optional(),
@@ -721,7 +721,7 @@ index e8df79eab..c56e681d5 100644
    runsOutAt: z.string().nullable().optional(),
    shortfallPct: z.number().nullable().optional(),
    tone: ProviderUsageToneSchema.optional(),
-@@ -6288,6 +6294,8 @@ export const ProviderUsageBalanceSchema = z.object({
+@@ -6334,6 +6340,8 @@ export const ProviderUsageBalanceSchema = z.object({
    limit: z.number().nullable().optional(),
    unit: z.enum(["usd", "credits", "requests", "tokens"]),
    resetsAt: z.string().nullable().optional(),
@@ -1076,10 +1076,10 @@ index cd2905ca2..b1693cf2c 100644
      }),
    );
 diff --git a/public-docs/plugins/reference.md b/public-docs/plugins/reference.md
-index e456e625b..b9dd9559b 100644
+index c35a62ca3..79722a463 100644
 --- a/public-docs/plugins/reference.md
 +++ b/public-docs/plugins/reference.md
-@@ -516,8 +516,15 @@ do not establish duration. When the provider omits it, use a neutral name such a
+@@ -536,8 +536,15 @@ do not establish duration. When the provider omits it, use a neutral name such a
  For numeric durations, use `windowFromReportedDuration()` from
  `@getpaseo/plugin/server/usage` (Paseo 0.11+). Pass the reported seconds or `null`, a neutral
  `unknown` identity and name, and an optional stable quota `scope`. The helper derives the ID,
