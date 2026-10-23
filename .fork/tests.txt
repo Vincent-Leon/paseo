@@ -15,3 +15,7 @@ plugins minimax-usage-source/server/usage.test.ts
 plugins cursor-usage-source/server/usage.test.ts
 packages/app src/stores/sidebar-collapsed-sections-store/state.test.ts
 packages/app src/utils/os-notifications.test.ts
+packages/server src/server/agent-attention-policy.test.ts
+packages/server src/server/websocket-server.notifications.test.ts
+packages/app src/background-connection/alerts.test.ts
+packages/app src/hooks/client-activity-tracker.test.ts
