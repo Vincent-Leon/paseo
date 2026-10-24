@@ -1,7 +1,7 @@
-From 66fcec8069d53cc5397ee69de9d2d9546c736a59 Mon Sep 17 00:00:00 2001
+From c5092d95d027c208907dcec88523048974d15219 Mon Sep 17 00:00:00 2001
 From: Vincent Leon <leon@mbp.com>
 Date: Thu, 22 Oct 2026 15:03:59 +0800
-Subject: [PATCH 4/7] feat(usage): tick each usage bar at the share of its
+Subject: [PATCH 04/11] feat(usage): tick each usage bar at the share of its
  window that has elapsed
 
 Usage windows carried how much was used and when they reset, but not how
@@ -39,14 +39,14 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
  packages/protocol/src/messages.ts             |  8 +++
  .../plugins/usage-sources/index.test.ts       | 37 ++++++++++++
  plugins/claude-usage-source/server/usage.ts   | 24 +++++++-
- plugins/cursor-usage-source/server/usage.ts   |  3 +
+ plugins/cursor-usage-source/server/usage.ts   |  4 ++
  plugins/grok-usage-source/server/usage.ts     |  9 ++-
  plugins/kimi-usage-source/server/usage.ts     | 45 ++++++++++++---
  plugins/minimax-usage-source/server/usage.ts  |  3 +
  plugins/muse-provider/server/usage.ts         |  2 +
  .../opencode-go-usage-source/server/usage.ts  | 11 ++--
  public-docs/plugins/reference.md              | 11 +++-
- 21 files changed, 420 insertions(+), 75 deletions(-)
+ 21 files changed, 421 insertions(+), 75 deletions(-)
 
 diff --git a/packages/app/src/usage/balance-bar.tsx b/packages/app/src/usage/balance-bar.tsx
 index def723c55..0a8360a7e 100644
@@ -836,7 +836,7 @@ index 9efade206..de31aaa94 100644
      });
    });
 diff --git a/plugins/cursor-usage-source/server/usage.ts b/plugins/cursor-usage-source/server/usage.ts
-index 2265dbb55..220e44a6a 100644
+index 58d5b48ec..c605d0e41 100644
 --- a/plugins/cursor-usage-source/server/usage.ts
 +++ b/plugins/cursor-usage-source/server/usage.ts
 @@ -6,6 +6,7 @@ import { homedir } from "node:os";
@@ -847,15 +847,23 @@ index 2265dbb55..220e44a6a 100644
    toneFromUsedPct,
    usedPctOf,
    unavailable,
-@@ -177,6 +178,7 @@ export async function fetchUsage(
+@@ -182,6 +183,7 @@ export async function fetchUsage(
  
    const resp = CursorUsageResponseSchema.parse(await res.json());
    const billingCycleEnd = parseCursorBillingCycleTimestamp(resp.billingCycleEnd);
 +  const billingCycleStart = parseCursorBillingCycleTimestamp(resp.billingCycleStart);
+   const windows: UsageWindow[] = [];
    const balances: UsageBalance[] = [];
    if (resp.planUsage) {
-     const totalSpend = centsToDollars(resp.planUsage.totalSpend);
-@@ -190,6 +192,7 @@ export async function fetchUsage(
+@@ -198,6 +200,7 @@ export async function fetchUsage(
+           label,
+           utilizationPct: usedPct,
+           resetsAt: billingCycleEnd,
++          durationSeconds: durationBetween(billingCycleStart, billingCycleEnd),
+           summary: id === "plan_usage",
+           tone: toneFromUsedPct(usedPct),
+         }),
+@@ -216,6 +219,7 @@ export async function fetchUsage(
        limit,
        unit: "usd",
        resetsAt: billingCycleEnd,
@@ -1076,7 +1084,7 @@ index cd2905ca2..b1693cf2c 100644
      }),
    );
 diff --git a/public-docs/plugins/reference.md b/public-docs/plugins/reference.md
-index c35a62ca3..79722a463 100644
+index 81b99b0dd..ee0a0e2e6 100644
 --- a/public-docs/plugins/reference.md
 +++ b/public-docs/plugins/reference.md
 @@ -536,8 +536,15 @@ do not establish duration. When the provider omits it, use a neutral name such a

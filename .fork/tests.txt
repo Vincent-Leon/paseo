@@ -14,8 +14,11 @@ plugins kimi-usage-source/server/usage.test.ts
 plugins minimax-usage-source/server/usage.test.ts
 plugins cursor-usage-source/server/usage.test.ts
 packages/app src/stores/sidebar-collapsed-sections-store/state.test.ts
-packages/app src/utils/os-notifications.test.ts
-packages/server src/server/agent-attention-policy.test.ts
-packages/server src/server/websocket-server.notifications.test.ts
-packages/app src/background-connection/alerts.test.ts
-packages/app src/hooks/client-activity-tracker.test.ts
+packages/app src/harmony/host.test.ts
+packages/app src/harmony/notifications.test.ts
+packages/app src/components/ui/tooltip.test.tsx
+packages/app src/hosts/pair-scan-model.test.ts
+packages/server src/server/push/providers/huawei/provider.test.ts
+packages/server src/server/push/token-store.test.ts
+packages/server src/server/push/index.test.ts
+packages/client src/daemon-client.test.ts

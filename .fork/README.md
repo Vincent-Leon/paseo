@@ -147,6 +147,8 @@ npm 11 skips dependency install scripts that are not listed in `allowScripts`. I
 
 Do not set `PASEO_DESKTOP_SMOKE=1` on a machine where Paseo is running. The smoke test launches the packaged app.
 
+The HarmonyOS app is built outside this workflow. Its HAP has to be signed with a developer's own AppGallery Connect profile, so it is built on that developer's machine: prepare a checkout as above, run `npm ci` in it, and hand it to `scripts/sync-web.sh` in the paseo-harmony project, which builds the web app with `PASEO_WEB_PLATFORM=harmony` (patch 0007).
+
 ## Switching back to official updates
 
 Download the official dmg from <https://github.com/getpaseo/paseo/releases/latest> and drag Paseo into Applications, replacing the fork build. The official app's `app-update.yml` points at `getpaseo/paseo` and it updates from there again. Your data in `~/.paseo` and `~/Library/Application Support/Paseo` is kept. Changing between the official and the fork signature resets macOS privacy permissions granted to the app, so expect those prompts again.

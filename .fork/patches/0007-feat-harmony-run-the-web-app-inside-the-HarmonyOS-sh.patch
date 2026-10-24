@@ -1,0 +1,1829 @@
+From 5c905e7164e710b9f3cb13d2a40336b7b1ac6fc9 Mon Sep 17 00:00:00 2001
+From: Vincent Leon <leon@mbp.com>
+Date: Fri, 23 Oct 2026 18:11:45 +0800
+Subject: [PATCH 07/11] feat(harmony): run the web app inside the HarmonyOS
+ shell
+
+The HarmonyOS app is an ArkWeb shell (paseo-harmony) around this web build.
+A build with PASEO_WEB_PLATFORM=harmony resolves *.harmony.ts variants that
+talk to the shell over window.paseoHarmony:
+
+- local notifications for agent and terminal alerts, with taps routed like
+  native notification responses, including taps that cold-start the app
+- the background connection setting, backed by a continuous task the shell
+  holds and restarts on return when the system cancelled it
+- page visibility that follows the app lifecycle, so presence and the alert
+  decision see Paseo leave the foreground
+- shell-driven keepalive while backgrounded, since a hidden page's timers can
+  be throttled below the relay's idle lease
+- the back gesture: top overlay, then Back handlers, then history
+- QR pairing through the system scanner, external links, system bar colours
+
+Hover-revealed controls now stay visible whenever there is no fine pointer,
+not only on native, so a touch screen in the wide layout (an unfolded
+foldable, a tablet) can reach them. Native behaviour is unchanged:
+useHasFinePointer is always false there.
+
+The background connection's start and stop become awaitable, because the
+shell answers asynchronously.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ packages/app/src/app/_layout.tsx              |   2 +
+ packages/app/src/app/pair-scan.tsx            |  75 +++++-
+ .../src/appearance/system-bars.harmony.tsx    |  39 +++
+ .../src/components/add-host-method-modal.tsx  |   5 +-
+ .../app/src/components/attachment-pill.tsx    |   5 +-
+ .../src/components/highlighted-code-block.tsx |   6 +-
+ packages/app/src/components/message.tsx       |  12 +-
+ packages/app/src/components/model-browser.tsx |   4 +-
+ .../src/components/sidebar-workspace-list.tsx |   7 +-
+ .../sidebar/sidebar-section-header.tsx        |   5 +-
+ .../sidebar/sidebar-status-list.tsx           |   4 +-
+ .../sidebar/sidebar-workspace-row.tsx         |   5 +-
+ .../back-press.harmony.ts                     |  13 +
+ packages/app/src/components/ui/tooltip.tsx    |   6 +-
+ .../app/src/components/welcome-screen.tsx     |  95 ++++---
+ packages/app/src/contexts/voice-context.tsx   |   2 +-
+ .../app/src/git/pull-request-panel/pane.tsx   |   5 +-
+ packages/app/src/harmony/back.ts              |  24 ++
+ .../app/src/harmony/host-sync.harmony.tsx     | 159 ++++++++++++
+ packages/app/src/harmony/host-sync.tsx        |   4 +
+ packages/app/src/harmony/host.test.ts         | 178 +++++++++++++
+ packages/app/src/harmony/host.ts              | 237 ++++++++++++++++++
+ .../app/src/harmony/notifications.test.ts     |  57 +++++
+ packages/app/src/harmony/notifications.ts     |  72 ++++++
+ packages/app/src/harmony/variant.ts           |  10 +
+ packages/app/src/harmony/visibility.ts        |  63 +++++
+ .../src/hosts/system-qr-scanner.harmony.ts    |  21 ++
+ packages/app/src/hosts/system-qr-scanner.ts   |  18 ++
+ .../workspace/workspace-desktop-tabs-row.tsx  |   5 +-
+ .../screens/workspace/workspace-screen.tsx    |  10 +-
+ packages/app/src/subagents/track.tsx          |   5 +-
+ packages/app/src/usage/card.tsx               |   5 +-
+ packages/app/src/utils/keep-awake.harmony.ts  |  21 ++
+ packages/app/src/utils/keep-awake.ts          |   3 +
+ .../src/utils/open-external-url.harmony.ts    |  16 ++
+ .../app/src/utils/os-notifications.harmony.ts |  24 ++
+ .../src/workspace-labels/manager-modal.tsx    |   5 +-
+ 37 files changed, 1142 insertions(+), 85 deletions(-)
+ create mode 100644 packages/app/src/appearance/system-bars.harmony.tsx
+ create mode 100644 packages/app/src/components/ui/isolated-bottom-sheet-modal/back-press.harmony.ts
+ create mode 100644 packages/app/src/harmony/back.ts
+ create mode 100644 packages/app/src/harmony/host-sync.harmony.tsx
+ create mode 100644 packages/app/src/harmony/host-sync.tsx
+ create mode 100644 packages/app/src/harmony/host.test.ts
+ create mode 100644 packages/app/src/harmony/host.ts
+ create mode 100644 packages/app/src/harmony/notifications.test.ts
+ create mode 100644 packages/app/src/harmony/notifications.ts
+ create mode 100644 packages/app/src/harmony/variant.ts
+ create mode 100644 packages/app/src/harmony/visibility.ts
+ create mode 100644 packages/app/src/hosts/system-qr-scanner.harmony.ts
+ create mode 100644 packages/app/src/hosts/system-qr-scanner.ts
+ create mode 100644 packages/app/src/utils/keep-awake.harmony.ts
+ create mode 100644 packages/app/src/utils/keep-awake.ts
+ create mode 100644 packages/app/src/utils/open-external-url.harmony.ts
+ create mode 100644 packages/app/src/utils/os-notifications.harmony.ts
+
+diff --git a/packages/app/src/app/_layout.tsx b/packages/app/src/app/_layout.tsx
+index 99022863f..951146005 100644
+--- a/packages/app/src/app/_layout.tsx
++++ b/packages/app/src/app/_layout.tsx
+@@ -92,6 +92,7 @@ import { KeyboardShiftProvider } from "@/keyboard/shift";
+ import { useCompactWebViewportZoomLock } from "@/hooks/use-compact-web-viewport-zoom-lock";
+ import { useOpenProject } from "@/hooks/use-open-project";
+ import { useAppSettings } from "@/hooks/use-settings";
++import { HarmonyHostSync } from "@/harmony/host-sync";
+ import { useOpenAgentListGesture } from "@/mobile-panels/gestures";
+ import { MobilePanelsProvider, useIsMobilePanelActive } from "@/mobile-panels/provider";
+ import {
+@@ -580,6 +581,7 @@ function ProvidersWrapper({ children }: { children: ReactNode }) {
+     <AppearanceProvider>
+       <VoiceProvider>
+         <DesktopWindowControlsSync />
++        <HarmonyHostSync />
+         <OfferLinkListener />
+         <HostSessionManager />
+         <FaviconStatusSync />
+diff --git a/packages/app/src/app/pair-scan.tsx b/packages/app/src/app/pair-scan.tsx
+index 5d352140e..0acb80747 100644
+--- a/packages/app/src/app/pair-scan.tsx
++++ b/packages/app/src/app/pair-scan.tsx
+@@ -1,4 +1,4 @@
+-import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
++import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+ import { useTranslation } from "react-i18next";
+ import { Pressable, Text, View } from "react-native";
+ import { useLocalSearchParams, useRouter, type Href } from "expo-router";
+@@ -8,6 +8,7 @@ import { CameraView, useCameraPermissions } from "expo-camera";
+ import type { BarcodeScanningResult, BarcodeSettings } from "expo-camera";
+ import { getHostRuntimeStore } from "@/runtime/host-runtime";
+ import { openPairScan } from "@/hosts/pair-scan-model";
++import { getSystemQrScanner } from "@/hosts/system-qr-scanner";
+ import { buildHostRootRoute, buildSettingsHostRoute } from "@/utils/host-routes";
+ import { isWeb } from "@/constants/platform";
+ import { BackHeader } from "@/components/headers/back-header";
+@@ -169,6 +170,37 @@ export default function PairScanScreen() {
+     [scan],
+   );
+ 
++  // The HarmonyOS shell scans with the system scanner, which covers the app while it is up. Each
++  // scanning state opens it once; backing out of it leaves this screen.
++  const [systemQrScanner] = useState(getSystemQrScanner);
++  const [systemScanRejected, setSystemScanRejected] = useState(false);
++  const systemScanInFlight = useRef(false);
++  useEffect(() => {
++    if (!systemQrScanner || scanState.status !== "scanning" || systemScanRejected) return;
++    if (systemScanInFlight.current) return;
++    systemScanInFlight.current = true;
++    void systemQrScanner()
++      .then((value) => {
++        if (value === null) {
++          closeToSource();
++          return;
++        }
++        scan.scan(value);
++        // The model ignores anything that is not a pairing link, as the camera does frame by
++        // frame; here there is no next frame, so say so.
++        if (scan.getState().status === "scanning") setSystemScanRejected(true);
++        return;
++      })
++      .catch(() => setSystemScanRejected(true))
++      .finally(() => {
++        systemScanInFlight.current = false;
++      });
++  }, [closeToSource, scan, scanState.status, systemQrScanner, systemScanRejected]);
++  const handleSystemScanAgain = useCallback(() => {
++    setSystemScanRejected(false);
++    scan.scanAgain();
++  }, [scan]);
++
+   const handleRouterBack = useCallback(() => router.back(), [router]);
+   const savePasswordPairing = useCallback(
+     ({ serverId }: { serverId: string }) => navigateToPairedHost(serverId),
+@@ -187,6 +219,47 @@ export default function PairScanScreen() {
+     [theme.colors.foreground],
+   );
+ 
++  if (isWeb && systemQrScanner) {
++    const attemptEnded = systemScanRejected || scanState.status === "stopped";
++    return (
++      <View style={styles.container}>
++        <BackHeader title={t("pairing.scan.title")} onBack={handleRouterBack} />
++        <View style={bodyStyle}>
++          {scanState.status === "pairing" ? (
++            <Text style={helperTextStyle}>{t("pairing.scan.pairing")}</Text>
++          ) : null}
++          {attemptEnded ? (
++            <View style={styles.permissionCard}>
++              {systemScanRejected ? (
++                <Text style={styles.permissionBody}>{t("pairing.link.errors.invalid")}</Text>
++              ) : null}
++              {scanState.status === "stopped" && scanState.error ? (
++                <Text style={styles.permissionBody}>{scanState.error}</Text>
++              ) : null}
++              <Pressable
++                style={styles.permissionButton}
++                onPress={handleSystemScanAgain}
++                testID="pair-scan-again"
++              >
++                <Text style={styles.permissionButtonText}>
++                  {t("pairing.connectionMethods.scanQr.title")}
++                </Text>
++              </Pressable>
++            </View>
++          ) : null}
++        </View>
++        <PairLinkModal
++          visible={scanState.status === "passwordRequired"}
++          passwordRequired={
++            scanState.status === "passwordRequired" ? scanState.passwordRequired : undefined
++          }
++          onClose={scan.closePassword}
++          onSaved={savePasswordPairing}
++        />
++      </View>
++    );
++  }
++
+   if (isWeb) {
+     return (
+       <View style={styles.container}>
+diff --git a/packages/app/src/appearance/system-bars.harmony.tsx b/packages/app/src/appearance/system-bars.harmony.tsx
+new file mode 100644
+index 000000000..f2693bf5b
+--- /dev/null
++++ b/packages/app/src/appearance/system-bars.harmony.tsx
+@@ -0,0 +1,39 @@
++import { assertCoversExports } from "@/harmony/variant";
++import { useEffect } from "react";
++import { withUnistyles } from "react-native-unistyles";
++import { harmonyHost } from "@/harmony/host";
++import type { Theme } from "@/styles/theme";
++import type * as Base from "./system-bars";
++
++// HarmonyOS takes #RRGGBB only (its own alpha form is #AARRGGBB, the reverse of CSS).
++function opaqueHex(color: string): string | undefined {
++  const value = color.trim();
++  if (/^#[0-9a-fA-F]{6}$/.test(value)) return value;
++  const short = /^#([0-9a-fA-F])([0-9a-fA-F])([0-9a-fA-F])$/.exec(value);
++  if (short) return `#${short[1]}${short[1]}${short[2]}${short[2]}${short[3]}${short[3]}`;
++  return undefined;
++}
++
++function ThemeSystemBars({
++  colorScheme,
++  background,
++}: {
++  colorScheme: Theme["colorScheme"];
++  background: string;
++}) {
++  // The shell paints the status bar and the navigation area to match the page.
++  useEffect(() => {
++    harmonyHost.send("systemBars.set", {
++      dark: colorScheme !== "light",
++      background: opaqueHex(background),
++    });
++  }, [background, colorScheme]);
++  return null;
++}
++
++export const AppearanceSystemBars = withUnistyles(ThemeSystemBars, (theme) => ({
++  colorScheme: theme.colorScheme,
++  background: theme.colors.surface0,
++}));
++
++assertCoversExports<typeof Base, typeof import("./system-bars.harmony")>();
+diff --git a/packages/app/src/components/add-host-method-modal.tsx b/packages/app/src/components/add-host-method-modal.tsx
+index b97c529be..ac3c8c80a 100644
+--- a/packages/app/src/components/add-host-method-modal.tsx
++++ b/packages/app/src/components/add-host-method-modal.tsx
+@@ -4,8 +4,7 @@ import { Pressable, Text, View } from "react-native";
+ import { StyleSheet, withUnistyles } from "react-native-unistyles";
+ import { QrCode, Link2, ClipboardPaste, Terminal } from "lucide-react-native";
+ import { AdaptiveModalSheet, type SheetHeader } from "./adaptive-modal-sheet";
+-import { isFdroidBuild } from "@/constants/build-profile";
+-import { isNative } from "@/constants/platform";
++import { canScanPairingQr } from "@/hosts/system-qr-scanner";
+ import { isElectronRuntime } from "@/desktop/host";
+ import type { Theme } from "@/styles/theme";
+ 
+@@ -118,7 +117,7 @@ export function AddHostMethodModal({
+         </Pressable>
+       ) : null}
+ 
+-      {isNative && !isFdroidBuild ? (
++      {canScanPairingQr() ? (
+         <Pressable
+           style={styles.option}
+           onPress={handleScan}
+diff --git a/packages/app/src/components/attachment-pill.tsx b/packages/app/src/components/attachment-pill.tsx
+index 4bf702252..ffcf6021f 100644
+--- a/packages/app/src/components/attachment-pill.tsx
++++ b/packages/app/src/components/attachment-pill.tsx
+@@ -2,7 +2,7 @@ import { type ReactNode, useCallback, useMemo, useState } from "react";
+ import { Image, Pressable, Text, View } from "react-native";
+ import { StyleSheet, withUnistyles } from "react-native-unistyles";
+ import { X } from "lucide-react-native";
+-import { isNative } from "@/constants/platform";
++import { useHasFinePointer } from "@/hooks/use-fine-pointer";
+ import { useIsCompactFormFactor } from "@/constants/layout";
+ import type { AttachmentMetadata } from "@/attachments/types";
+ import { useAttachmentPreviewUrl } from "@/attachments/use-attachment-preview-url";
+@@ -34,7 +34,8 @@ export function AttachmentPill({
+   const isCompact = useIsCompactFormFactor();
+   const [isBodyHovered, setIsBodyHovered] = useState(false);
+   const [isCloseHovered, setIsCloseHovered] = useState(false);
+-  const alwaysShow = isNative || isCompact;
++  const hasFinePointer = useHasFinePointer();
++  const alwaysShow = !hasFinePointer || isCompact;
+   const showRemove = alwaysShow || isBodyHovered || isCloseHovered;
+   const closeButtonStyle = useMemo(
+     () => [styles.closeButton, !showRemove && styles.closeButtonHidden],
+diff --git a/packages/app/src/components/highlighted-code-block.tsx b/packages/app/src/components/highlighted-code-block.tsx
+index 292ec5361..2886b85cf 100644
+--- a/packages/app/src/components/highlighted-code-block.tsx
++++ b/packages/app/src/components/highlighted-code-block.tsx
+@@ -12,7 +12,8 @@ import * as Clipboard from "expo-clipboard";
+ import { Check, Copy } from "lucide-react-native";
+ import { useTranslation } from "react-i18next";
+ import type { HighlightToken } from "@getpaseo/highlight";
+-import { isNative, isWeb } from "@/constants/platform";
++import { isWeb } from "@/constants/platform";
++import { useHasFinePointer } from "@/hooks/use-fine-pointer";
+ import { useIsCompactFormFactor } from "@/constants/layout";
+ import { syntaxTokenStyleFor } from "@/styles/syntax-token-styles";
+ import { CODE_SURFACE_DATASET } from "@/styles/code-surface";
+@@ -88,7 +89,8 @@ export const HighlightedCodeBlock = React.memo(function HighlightedCodeBlock({
+   const [isHovered, setIsHovered] = useState(false);
+   const handlePointerEnter = useCallback(() => setIsHovered(true), []);
+   const handlePointerLeave = useCallback(() => setIsHovered(false), []);
+-  const controlsVisible = isHovered || isNative || isCompact;
++  const hasFinePointer = useHasFinePointer();
++  const controlsVisible = isHovered || !hasFinePointer || isCompact;
+   // Copy the code without its trailing blank lines. A fence body ends in a newline,
+   // and ends in more than one when the author left a blank line before the closing
+   // fence; pasting any of them into a terminal runs the last line.
+diff --git a/packages/app/src/components/message.tsx b/packages/app/src/components/message.tsx
+index c8203cb90..96a7cd598 100644
+--- a/packages/app/src/components/message.tsx
++++ b/packages/app/src/components/message.tsx
+@@ -15,6 +15,7 @@ import { TaskListRow } from "@/components/task-list-row";
+ import { LoadingSpinner } from "@/components/ui/loading-spinner";
+ import { useIsCompactFormFactor } from "@/constants/layout";
+ import { isNative, isWeb } from "@/constants/platform";
++import { useHasFinePointer } from "@/hooks/use-fine-pointer";
+ import { useRevealedText, type MarkdownPhase } from "@/hooks/use-revealed-text";
+ import { ICON_SIZE, type Theme } from "@/styles/theme";
+ import { inlineUnistylesStyle } from "@/styles/unistyles-inline-style";
+@@ -414,7 +415,8 @@ export const UserMessage = memo(function UserMessage({
+   const hasText = message.trim().length > 0;
+   const hasImages = images.length > 0;
+   const hasAttachments = attachments.length > 0;
+-  const showTrailingRow = !isPending && hasText && (isCompact || isNative || isHovered);
++  const hasFinePointer = useHasFinePointer();
++  const showTrailingRow = !isPending && hasText && (isCompact || !hasFinePointer || isHovered);
+   const formattedTimestamp = useMemo(
+     () => formatMessageTimestamp(new Date(timestamp)),
+     [timestamp],
+@@ -616,12 +618,14 @@ export const AssistantTurnFooter = memo(function AssistantTurnFooter({
+ 
+   const primaryLabel = durationLabel || timestampLabel;
+   const canSwap = Boolean(durationLabel && timestampLabel);
+-  const showTimestamp = canSwap && (isWeb ? hovered : pressedReveal);
++  // A touch screen has no hover to reveal the timestamp with, so a tap does it, as on native.
++  const hasFinePointer = useHasFinePointer();
++  const showTimestamp = canSwap && (hasFinePointer ? hovered : pressedReveal);
+ 
+   const handleHoverIn = useCallback(() => setHovered(true), []);
+   const handleHoverOut = useCallback(() => setHovered(false), []);
+   const handlePress = useCallback(() => {
+-    if (isWeb || !canSwap) return;
++    if (hasFinePointer || !canSwap) return;
+     if (revealTimerRef.current) {
+       clearTimeout(revealTimerRef.current);
+     }
+@@ -630,7 +634,7 @@ export const AssistantTurnFooter = memo(function AssistantTurnFooter({
+       setPressedReveal(false);
+       revealTimerRef.current = null;
+     }, TIMESTAMP_REVEAL_MS);
+-  }, [canSwap]);
++  }, [canSwap, hasFinePointer]);
+   const handleFork = useCallback(
+     (target: AssistantForkTarget) => {
+       return onFork?.(target);
+diff --git a/packages/app/src/components/model-browser.tsx b/packages/app/src/components/model-browser.tsx
+index 17924b233..06b0d6890 100644
+--- a/packages/app/src/components/model-browser.tsx
++++ b/packages/app/src/components/model-browser.tsx
+@@ -42,6 +42,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
+ import { useProviderIcon } from "@/components/provider-icons";
+ import { useIsCompactFormFactor } from "@/constants/layout";
+ import { isNative, isWeb } from "@/constants/platform";
++import { useHasFinePointer } from "@/hooks/use-fine-pointer";
+ import {
+   buildProviderQualifiedDescription,
+   buildSelectedTriggerLabel,
+@@ -624,7 +625,8 @@ function ModelRowProfileAction({
+   children: React.ReactNode;
+ }) {
+   const isCompact = useIsCompactFormFactor();
+-  const visible = hovered || isNative || isCompact;
++  const hasFinePointer = useHasFinePointer();
++  const visible = hovered || !hasFinePointer || isCompact;
+   const pressableStyle = useCallback(
+     ({ hovered: buttonHovered, pressed }: PressableStateCallbackType & { hovered?: boolean }) => [
+       styles.rowIconButton,
+diff --git a/packages/app/src/components/sidebar-workspace-list.tsx b/packages/app/src/components/sidebar-workspace-list.tsx
+index c3048e6d9..8eef21edf 100644
+--- a/packages/app/src/components/sidebar-workspace-list.tsx
++++ b/packages/app/src/components/sidebar-workspace-list.tsx
+@@ -146,6 +146,7 @@ import {
+   isNative as platformIsNative,
+   getIsElectron,
+ } from "@/constants/platform";
++import { useHasFinePointer } from "@/hooks/use-fine-pointer";
+ import { getDesktopHost } from "@/desktop/host";
+ import { OpenInFileManagerMenuItem } from "@/workspace/open-in-file-manager/menu-item";
+ import { useLocalDaemonServerId } from "@/hooks/use-is-local-daemon";
+@@ -426,7 +427,8 @@ function ProjectRowTrailingActions({
+   onRemoveProject?: () => void;
+   removeProjectStatus: "idle" | "pending" | "success";
+ }) {
+-  const actionsVisible = isHovered || platformIsNative || isMobileBreakpoint;
++  const hasFinePointer = useHasFinePointer();
++  const actionsVisible = isHovered || !hasFinePointer || isMobileBreakpoint;
+   return (
+     <View style={styles.projectTrailingActions}>
+       {worktreeTarget ? (
+@@ -1079,7 +1081,8 @@ function WorkspaceRowInner({
+ }: WorkspaceRowInnerProps) {
+   const isCompact = useIsCompactFormFactor();
+   const [isPressed, setIsPressed] = useState(false);
+-  const isTouchPlatform = platformIsNative || isCompact;
++  const hasFinePointer = useHasFinePointer();
++  const isTouchPlatform = !hasFinePointer || isCompact;
+   const interaction = useLongPressDragInteraction({
+     drag,
+     menuController,
+diff --git a/packages/app/src/components/sidebar/sidebar-section-header.tsx b/packages/app/src/components/sidebar/sidebar-section-header.tsx
+index 7a959435b..dce656779 100644
+--- a/packages/app/src/components/sidebar/sidebar-section-header.tsx
++++ b/packages/app/src/components/sidebar/sidebar-section-header.tsx
+@@ -4,7 +4,7 @@ import { Pressable, Text, View } from "react-native";
+ import { StyleSheet } from "react-native-unistyles";
+ import { DensityIcon } from "@/components/ui/density-icon";
+ import { useIsCompactFormFactor } from "@/constants/layout";
+-import { isNative } from "@/constants/platform";
++import { useHasFinePointer } from "@/hooks/use-fine-pointer";
+ import { density } from "@/styles/density";
+ 
+ /** A sidebar section label such as "Pinned" or "Workspaces". A section with `onToggle`
+@@ -53,6 +53,7 @@ function CollapsibleTitle({
+   testID?: string;
+ }) {
+   const isCompact = useIsCompactFormFactor();
++  const hasFinePointer = useHasFinePointer();
+   const accessibilityState = useMemo(() => ({ expanded: !collapsed }), [collapsed]);
+ 
+   return (
+@@ -66,7 +67,7 @@ function CollapsibleTitle({
+       {({ hovered }) => (
+         <>
+           <Text style={styles.title}>{title}</Text>
+-          {hovered || isNative || isCompact ? (
++          {hovered || !hasFinePointer || isCompact ? (
+             <DensityIcon
+               icon={collapsed ? ChevronRight : ChevronDown}
+               size="xs"
+diff --git a/packages/app/src/components/sidebar/sidebar-status-list.tsx b/packages/app/src/components/sidebar/sidebar-status-list.tsx
+index 26440c37a..5ee7816d9 100644
+--- a/packages/app/src/components/sidebar/sidebar-status-list.tsx
++++ b/packages/app/src/components/sidebar/sidebar-status-list.tsx
+@@ -27,6 +27,7 @@ import type { SidebarWorkspaceGroup } from "@/components/sidebar/sidebar-labels"
+ import { SidebarFilterEmptyState } from "@/components/sidebar/empty-states";
+ import type { HostBadgeModel } from "@/hosts/appearance";
+ import { isWeb as platformIsWeb, isNative as platformIsNative } from "@/constants/platform";
++import { useHasFinePointer } from "@/hooks/use-fine-pointer";
+ import { useIsCompactFormFactor } from "@/constants/layout";
+ import { StyleSheet } from "react-native-unistyles";
+ import { density, densityIconBox, densityIconProps } from "@/styles/density";
+@@ -898,7 +899,8 @@ function StatusWorkspaceRowInnerContent({
+   dragInteraction?: ReturnType<typeof useLongPressDragInteraction>;
+ }) {
+   const isCompact = useIsCompactFormFactor();
+-  const isTouchPlatform = platformIsNative || isCompact;
++  const hasFinePointer = useHasFinePointer();
++  const isTouchPlatform = !hasFinePointer || isCompact;
+   const [isPressed, setIsPressed] = useState(false);
+   const trailing = useSidebarWorkspaceTrailing();
+   const {
+diff --git a/packages/app/src/components/sidebar/sidebar-workspace-row.tsx b/packages/app/src/components/sidebar/sidebar-workspace-row.tsx
+index 2488e7956..1191ce647 100644
+--- a/packages/app/src/components/sidebar/sidebar-workspace-row.tsx
++++ b/packages/app/src/components/sidebar/sidebar-workspace-row.tsx
+@@ -17,7 +17,7 @@ import { useShortcutKeys } from "@/hooks/use-shortcut-keys";
+ import { useKeyboardActionHandler } from "@/hooks/use-keyboard-action-handler";
+ import { useWorkspaceReadState } from "@/hooks/use-workspace-read-state";
+ import { redirectIfArchivingActiveWorkspace } from "@/utils/sidebar-workspace-archive-redirect";
+-import { isNative as platformIsNative } from "@/constants/platform";
++import { useHasFinePointer } from "@/hooks/use-fine-pointer";
+ import { useIsCompactFormFactor } from "@/constants/layout";
+ import { useLongPressDragInteraction } from "@/components/sidebar/use-long-press-drag-interaction";
+ import {
+@@ -232,7 +232,8 @@ function WorkspaceRowBody({
+   archiveShortcutKeys,
+ }: WorkspaceRowBodyProps) {
+   const isCompact = useIsCompactFormFactor();
+-  const isTouchPlatform = platformIsNative || isCompact;
++  const hasFinePointer = useHasFinePointer();
++  const isTouchPlatform = !hasFinePointer || isCompact;
+   const [isPressed, setIsPressed] = useState(false);
+   const trailing = useSidebarWorkspaceTrailing();
+   const draggable = Boolean(drag);
+diff --git a/packages/app/src/components/ui/isolated-bottom-sheet-modal/back-press.harmony.ts b/packages/app/src/components/ui/isolated-bottom-sheet-modal/back-press.harmony.ts
+new file mode 100644
+index 000000000..c8301147c
+--- /dev/null
++++ b/packages/app/src/components/ui/isolated-bottom-sheet-modal/back-press.harmony.ts
+@@ -0,0 +1,13 @@
++import { assertCoversExports } from "@/harmony/variant";
++import { addHarmonyBackHandler } from "@/harmony/back";
++import type { BackPressSource } from "./visibility-tracker";
++import type * as Base from "./back-press";
++
++/** The HarmonyOS back gesture, which the shell forwards to the page. */
++export const systemBackPress: BackPressSource = {
++  subscribe(onBackPress) {
++    return addHarmonyBackHandler(onBackPress);
++  },
++};
++
++assertCoversExports<typeof Base, typeof import("./back-press.harmony")>();
+diff --git a/packages/app/src/components/ui/tooltip.tsx b/packages/app/src/components/ui/tooltip.tsx
+index ae00768a3..b196a8679 100644
+--- a/packages/app/src/components/ui/tooltip.tsx
++++ b/packages/app/src/components/ui/tooltip.tsx
+@@ -27,7 +27,8 @@ import { FadeIn, FadeOut } from "react-native-reanimated";
+ import { StyleSheet } from "react-native-unistyles";
+ import { useIsCompactFormFactor } from "@/constants/layout";
+ import { FloatingSurface } from "@/components/ui/floating";
+-import { isNative, isWeb } from "@/constants/platform";
++import { isWeb } from "@/constants/platform";
++import { useHasFinePointer } from "@/hooks/use-fine-pointer";
+ import { getOverlayRoot, OVERLAY_Z } from "@/lib/overlay-root";
+ 
+ type Side = "top" | "bottom" | "left" | "right";
+@@ -256,7 +257,8 @@ export function Tooltip({
+   });
+ 
+   const isCompact = useIsCompactFormFactor();
+-  const opensOnPress = isNative || isCompact;
++  const hasFinePointer = useHasFinePointer();
++  const opensOnPress = !hasFinePointer || isCompact;
+   const enabled = opensOnPress ? enabledOnMobile : enabledOnDesktop;
+ 
+   const value = useMemo<TooltipContextValue>(
+diff --git a/packages/app/src/components/welcome-screen.tsx b/packages/app/src/components/welcome-screen.tsx
+index 1b3cdbe23..ee889c4f3 100644
+--- a/packages/app/src/components/welcome-screen.tsx
++++ b/packages/app/src/components/welcome-screen.tsx
+@@ -23,9 +23,9 @@ import { formatVersionWithPrefix } from "@/desktop/updates/desktop-updates";
+ import { buildOpenProjectRoute } from "@/utils/host-routes";
+ import { PaseoLogo } from "@/components/icons/paseo-logo";
+ import { openExternalUrl } from "@/utils/open-external-url";
+-import { isFdroidBuild } from "@/constants/build-profile";
+-import { isWeb, isNative } from "@/constants/platform";
++import { isNative } from "@/constants/platform";
+ import { isElectronRuntime } from "@/desktop/host";
++import { canScanPairingQr } from "@/hosts/system-qr-scanner";
+ 
+ interface WelcomeAction {
+   key: "scan-qr" | "direct-connection" | "remote-ssh" | "paste-pairing-link";
+@@ -214,52 +214,51 @@ export function WelcomeScreen({ onHostAdded }: WelcomeScreenProps) {
+     [onHostAdded, finishOnboarding],
+   );
+ 
+-  const actions: WelcomeAction[] =
+-    isWeb || isFdroidBuild
+-      ? [
+-          {
+-            key: "direct-connection",
+-            label: t("pairing.connectionMethods.direct.title"),
+-            testID: "welcome-direct-connection",
+-            primary: true,
+-            icon: Link2,
+-            onPress: handleOpenDirect,
+-          },
+-          {
+-            key: "paste-pairing-link",
+-            label: t("pairing.connectionMethods.pasteLink.title"),
+-            testID: "welcome-paste-pairing-link",
+-            primary: false,
+-            icon: ClipboardPaste,
+-            onPress: handleOpenPasteLink,
+-          },
+-        ]
+-      : [
+-          {
+-            key: "scan-qr",
+-            label: t("pairing.connectionMethods.scanQr.title"),
+-            testID: "welcome-scan-qr",
+-            primary: true,
+-            icon: QrCode,
+-            onPress: handleScanQr,
+-          },
+-          {
+-            key: "direct-connection",
+-            label: t("pairing.connectionMethods.direct.title"),
+-            testID: "welcome-direct-connection",
+-            primary: false,
+-            icon: Link2,
+-            onPress: handleOpenDirect,
+-          },
+-          {
+-            key: "paste-pairing-link",
+-            label: t("pairing.connectionMethods.pasteLink.title"),
+-            testID: "welcome-paste-pairing-link",
+-            primary: false,
+-            icon: ClipboardPaste,
+-            onPress: handleOpenPasteLink,
+-          },
+-        ];
++  const actions: WelcomeAction[] = !canScanPairingQr()
++    ? [
++        {
++          key: "direct-connection",
++          label: t("pairing.connectionMethods.direct.title"),
++          testID: "welcome-direct-connection",
++          primary: true,
++          icon: Link2,
++          onPress: handleOpenDirect,
++        },
++        {
++          key: "paste-pairing-link",
++          label: t("pairing.connectionMethods.pasteLink.title"),
++          testID: "welcome-paste-pairing-link",
++          primary: false,
++          icon: ClipboardPaste,
++          onPress: handleOpenPasteLink,
++        },
++      ]
++    : [
++        {
++          key: "scan-qr",
++          label: t("pairing.connectionMethods.scanQr.title"),
++          testID: "welcome-scan-qr",
++          primary: true,
++          icon: QrCode,
++          onPress: handleScanQr,
++        },
++        {
++          key: "direct-connection",
++          label: t("pairing.connectionMethods.direct.title"),
++          testID: "welcome-direct-connection",
++          primary: false,
++          icon: Link2,
++          onPress: handleOpenDirect,
++        },
++        {
++          key: "paste-pairing-link",
++          label: t("pairing.connectionMethods.pasteLink.title"),
++          testID: "welcome-paste-pairing-link",
++          primary: false,
++          icon: ClipboardPaste,
++          onPress: handleOpenPasteLink,
++        },
++      ];
+ 
+   if (isElectronRuntime()) {
+     actions.splice(1, 0, {
+diff --git a/packages/app/src/contexts/voice-context.tsx b/packages/app/src/contexts/voice-context.tsx
+index 4c8d04e2f..8239ed8c6 100644
+--- a/packages/app/src/contexts/voice-context.tsx
++++ b/packages/app/src/contexts/voice-context.tsx
+@@ -7,7 +7,7 @@ import {
+   useSyncExternalStore,
+   type ReactNode,
+ } from "react";
+-import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
++import { activateKeepAwakeAsync, deactivateKeepAwake } from "@/utils/keep-awake";
+ import { useSessionStore } from "@/stores/session-store";
+ import { createAudioEngine } from "@/audio";
+ import type { AudioEngine } from "@/audio";
+diff --git a/packages/app/src/git/pull-request-panel/pane.tsx b/packages/app/src/git/pull-request-panel/pane.tsx
+index 429dd2be0..be88104cf 100644
+--- a/packages/app/src/git/pull-request-panel/pane.tsx
++++ b/packages/app/src/git/pull-request-panel/pane.tsx
+@@ -35,7 +35,7 @@ import { useSessionStore } from "@/stores/session-store";
+ import { useWorkspaceAttachmentsStore } from "@/attachments/workspace-attachments-store";
+ import { useToast } from "@/contexts/toast-context";
+ import { useCheckoutGitActionsStore } from "@/git/actions-store";
+-import { isNative } from "@/constants/platform";
++import { useHasFinePointer } from "@/hooks/use-fine-pointer";
+ import { useIsCompactFormFactor } from "@/constants/layout";
+ import {
+   PaneContentToolbar,
+@@ -668,7 +668,8 @@ function useRevealOnHover() {
+   const [menuOpen, setMenuOpen] = useState(false);
+   const handlePointerEnter = useCallback(() => setIsHovered(true), []);
+   const handlePointerLeave = useCallback(() => setIsHovered(false), []);
+-  const actionsVisible = isHovered || menuOpen || isNative || isCompact;
++  const hasFinePointer = useHasFinePointer();
++  const actionsVisible = isHovered || menuOpen || !hasFinePointer || isCompact;
+   return { actionsVisible, handlePointerEnter, handlePointerLeave, setMenuOpen };
+ }
+ 
+diff --git a/packages/app/src/harmony/back.ts b/packages/app/src/harmony/back.ts
+new file mode 100644
+index 000000000..ce0f5dc02
+--- /dev/null
++++ b/packages/app/src/harmony/back.ts
+@@ -0,0 +1,24 @@
++/**
++ * The HarmonyOS back gesture, for code that handles Android's hardware Back.
++ *
++ * Handlers run newest first, like React Native's BackHandler, and the first one to return true
++ * consumes the press.
++ */
++type BackHandler = () => boolean;
++
++const handlers: BackHandler[] = [];
++
++export function addHarmonyBackHandler(handler: BackHandler): () => void {
++  handlers.push(handler);
++  return () => {
++    const index = handlers.lastIndexOf(handler);
++    if (index !== -1) handlers.splice(index, 1);
++  };
++}
++
++export function runHarmonyBackHandlers(): boolean {
++  for (let index = handlers.length - 1; index >= 0; index -= 1) {
++    if (handlers[index]?.()) return true;
++  }
++  return false;
++}
+diff --git a/packages/app/src/harmony/host-sync.harmony.tsx b/packages/app/src/harmony/host-sync.harmony.tsx
+new file mode 100644
+index 000000000..cbea1e720
+--- /dev/null
++++ b/packages/app/src/harmony/host-sync.harmony.tsx
+@@ -0,0 +1,159 @@
++import { assertCoversExports } from "./variant";
++import { useEffect } from "react";
++import { useRouter } from "expo-router";
++import { parseAgentDeepLink } from "@getpaseo/protocol/agent-deep-link";
++import { dispatchTopWebOverlayKeyDown } from "@/lib/overlay-root";
++import { getHostRuntimeStore } from "@/runtime/host-runtime";
++import { buildOpenProjectRoute } from "@/utils/host-routes";
++import { navigateToAgent } from "@/utils/navigate-to-agent";
++import { runHarmonyBackHandlers } from "./back";
++import { harmonyHost } from "./host";
++import { parseNotificationTapData, requestHarmonyNotificationPermission } from "./notifications";
++import { installHostVisibility } from "./visibility";
++import type * as Base from "./host-sync";
++
++const NOTIFICATIONS_ASKED_KEY = "@paseo:harmony-notifications-asked";
++// The event a browser notification click raises (os-notifications.ts); the app's notification
++// router handles it and calls preventDefault.
++const WEB_NOTIFICATION_CLICK_EVENT = "paseo:web-notification-click";
++const TAP_RETRY_MS = 500;
++const TAP_GIVE_UP_MS = 15_000;
++
++function field(payload: unknown, key: string): unknown {
++  return typeof payload === "object" && payload !== null
++    ? (payload as Record<string, unknown>)[key]
++    : undefined;
++}
++
++// Module scope, so the page follows the app's lifecycle from the first event on, before React
++// has rendered anything that reads it.
++const visibility = typeof document === "undefined" ? null : installHostVisibility(document);
++if (harmonyHost.hostInfo()?.foreground === false) visibility?.setHostState("background");
++
++harmonyHost.on("lifecycle", (payload) => {
++  const state = field(payload, "state");
++  if (state !== "active" && state !== "background") return;
++  visibility?.setHostState(state);
++  if (state === "active") reportBackgroundDiagnostics();
++});
++
++/**
++ * Pings every live connection and reconnects a dead one at once, skipping the backoff timer.
++ * A hidden page's own timers can be throttled to once a minute, slower than the relay's idle
++ * lease, so while the continuous task holds the app the shell drives this instead.
++ */
++function keepConnectionsAlive(): void {
++  getHostRuntimeStore().ensureConnectedAll({ verify: true });
++}
++
++harmonyHost.on("tick", (payload) => {
++  harmonyHost.send("tick.ack", { sentAt: field(payload, "sentAt") });
++  keepConnectionsAlive();
++});
++
++// A network switch kills sockets without a close event.
++harmonyHost.on("network", (payload) => {
++  if (field(payload, "available") === true) keepConnectionsAlive();
++});
++
++/** Whether the page kept running in the background shows up in the device log on every return. */
++function reportBackgroundDiagnostics(): void {
++  void harmonyHost
++    .request("diagnostics")
++    .then((diagnostics) =>
++      harmonyHost.send("log", { level: "info", message: `resumed ${JSON.stringify(diagnostics)}` }),
++    )
++    .catch(() => undefined);
++}
++
++/**
++ * Hands a notification tap to the app's notification router as a browser notification click.
++ * A tap that cold-starts the app can arrive before the router has mounted; nobody cancelling the
++ * event means nobody handled it, so it is offered again until someone does.
++ */
++function openNotificationTap(data: Record<string, unknown> | undefined, startedAt = Date.now()) {
++  const event = new CustomEvent(WEB_NOTIFICATION_CLICK_EVENT, {
++    detail: { data },
++    cancelable: true,
++  });
++  const unhandled = window.dispatchEvent(event);
++  if (unhandled && Date.now() - startedAt < TAP_GIVE_UP_MS) {
++    setTimeout(() => openNotificationTap(data, startedAt), TAP_RETRY_MS);
++  }
++}
++
++harmonyHost.on("notification.open", (payload) => {
++  openNotificationTap(parseNotificationTapData(payload));
++});
++
++function isPairingLink(url: string): boolean {
++  return url.includes("#offer=") || url.includes("#connect=") || url.startsWith("relay://");
++}
++
++/**
++ * Back closes what is on top first, the way Escape does in a browser, then whatever Android's
++ * hardware Back would close, then goes back in history. Only when nothing is left does the shell
++ * send the app to the background.
++ */
++function handleBack(router: ReturnType<typeof useRouter>): boolean {
++  const escape = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
++  if (dispatchTopWebOverlayKeyDown(escape)) return true;
++  if (runHarmonyBackHandlers()) return true;
++  if (router.canGoBack()) {
++    router.back();
++    return true;
++  }
++  return false;
++}
++
++/** The HarmonyOS shell's page-side wiring: back gesture, links from outside, first-run asks. */
++export function HarmonyHostSync() {
++  const router = useRouter();
++
++  useEffect(() => {
++    const stopBack = harmonyHost.on("back", (payload) => {
++      let handled = false;
++      try {
++        handled = handleBack(router);
++      } finally {
++        harmonyHost.send("back.result", { seq: field(payload, "seq"), handled });
++      }
++    });
++
++    const stopLinks = harmonyHost.on("link.open", (payload) => {
++      const url = field(payload, "url");
++      if (typeof url !== "string") return;
++      if (isPairingLink(url)) {
++        void getHostRuntimeStore()
++          .importConnectionLink(url, "openProject")
++          .then((result) => {
++            if (result.status === "connected") router.replace(buildOpenProjectRoute());
++            return;
++          })
++          .catch((error) => console.warn("[HarmonyHost] Pairing link failed", error));
++        return;
++      }
++      const agent = parseAgentDeepLink(url);
++      if (agent) navigateToAgent({ ...agent, pin: true });
++    });
++
++    return () => {
++      stopBack();
++      stopLinks();
++    };
++  }, [router]);
++
++  // Without push, alerts only ever reach the shade as the shell's local notifications, so the
++  // permission is worth asking for up front, once.
++  useEffect(() => {
++    if (typeof localStorage === "undefined" || localStorage.getItem(NOTIFICATIONS_ASKED_KEY)) {
++      return;
++    }
++    localStorage.setItem(NOTIFICATIONS_ASKED_KEY, "1");
++    void requestHarmonyNotificationPermission();
++  }, []);
++
++  return null;
++}
++
++assertCoversExports<typeof Base, typeof import("./host-sync.harmony")>();
+diff --git a/packages/app/src/harmony/host-sync.tsx b/packages/app/src/harmony/host-sync.tsx
+new file mode 100644
+index 000000000..704f10faa
+--- /dev/null
++++ b/packages/app/src/harmony/host-sync.tsx
+@@ -0,0 +1,4 @@
++/** The HarmonyOS shell's page-side wiring; host-sync.harmony.tsx. Nothing to do elsewhere. */
++export function HarmonyHostSync() {
++  return null;
++}
+diff --git a/packages/app/src/harmony/host.test.ts b/packages/app/src/harmony/host.test.ts
+new file mode 100644
+index 000000000..159616c82
+--- /dev/null
++++ b/packages/app/src/harmony/host.test.ts
+@@ -0,0 +1,178 @@
++import { describe, expect, it } from "vitest";
++import { HarmonyChannel, type HarmonyBridgeObject } from "./host";
++import { installHostVisibility } from "./visibility";
++
++interface Harness {
++  channel: HarmonyChannel;
++  posted: Array<{ id: number; type: string; payload?: unknown }>;
++  deliver: (message: unknown) => void;
++  fireTimers: () => void;
++}
++
++function createHarness(input: { bridge?: boolean } = {}): Harness {
++  const posted: Harness["posted"] = [];
++  const timers = new Map<number, () => void>();
++  let nextTimer = 1;
++  let receiver: ((message: string) => void) | null = null;
++  const bridge: HarmonyBridgeObject = {
++    post: (message) => posted.push(JSON.parse(message)),
++    hostInfo: () => JSON.stringify({ shell: "harmony", canScan: true }),
++  };
++  const channel = new HarmonyChannel({
++    bridge: () => (input.bridge === false ? null : bridge),
++    installReceiver: (receive) => {
++      receiver = receive;
++    },
++    setTimer: (callback) => {
++      const id = nextTimer++;
++      timers.set(id, callback);
++      return id;
++    },
++    clearTimer: (handle) => {
++      timers.delete(handle as number);
++    },
++  });
++  return {
++    channel,
++    posted,
++    deliver: (message) => receiver?.(JSON.stringify(message)),
++    fireTimers: () => {
++      const pending = [...timers.values()];
++      timers.clear();
++      for (const callback of pending) callback();
++    },
++  };
++}
++
++describe("HarmonyChannel", () => {
++  it("announces the page once and reads the host info synchronously", () => {
++    const harness = createHarness();
++
++    expect(harness.channel.connect()).toBe(true);
++    expect(harness.channel.connect()).toBe(true);
++
++    expect(harness.posted).toEqual([{ id: 0, type: "ready" }]);
++    expect(harness.channel.hostInfo()).toEqual({ shell: "harmony", canScan: true });
++  });
++
++  it("does nothing outside the shell", async () => {
++    const harness = createHarness({ bridge: false });
++
++    expect(harness.channel.connect()).toBe(false);
++    expect(harness.channel.hostInfo()).toBeNull();
++    await expect(harness.channel.request("scan.qr")).rejects.toThrow("not available");
++  });
++
++  it("matches answers to their requests by id", async () => {
++    const harness = createHarness();
++    harness.channel.connect();
++
++    const first = harness.channel.request<{ enabled: boolean }>("notifications.status");
++    const second = harness.channel.request("links.open", { url: "https://paseo.sh" });
++    const [, firstRequest, secondRequest] = harness.posted;
++
++    harness.deliver({
++      kind: "response",
++      id: secondRequest.id,
++      ok: false,
++      result: null,
++      error: "no",
++    });
++    harness.deliver({
++      kind: "response",
++      id: firstRequest.id,
++      ok: true,
++      result: { enabled: true },
++      error: null,
++    });
++
++    await expect(first).resolves.toEqual({ enabled: true });
++    await expect(second).rejects.toThrow("no");
++    expect(secondRequest.payload).toEqual({ url: "https://paseo.sh" });
++  });
++
++  it("gives up on a request the shell never answers, unless told to wait", async () => {
++    const harness = createHarness();
++    harness.channel.connect();
++
++    const timed = harness.channel.request("background.status");
++    const patient = harness.channel.request("scan.qr", undefined, { timeoutMs: null });
++    harness.fireTimers();
++
++    await expect(timed).rejects.toThrow("did not answer background.status");
++    const scanRequest = harness.posted[2];
++    harness.deliver({
++      kind: "response",
++      id: scanRequest.id,
++      ok: true,
++      result: { value: "x" },
++      error: null,
++    });
++    await expect(patient).resolves.toEqual({ value: "x" });
++  });
++
++  it("holds events until someone listens, then replays them in order", () => {
++    const harness = createHarness();
++    harness.channel.connect();
++    harness.deliver({ kind: "event", type: "notification.open", payload: { data: "a" } });
++    harness.deliver({ kind: "event", type: "notification.open", payload: { data: "b" } });
++
++    const received: unknown[] = [];
++    const unsubscribe = harness.channel.on("notification.open", (payload) =>
++      received.push(payload),
++    );
++    harness.deliver({ kind: "event", type: "notification.open", payload: { data: "c" } });
++    unsubscribe();
++    harness.deliver({ kind: "event", type: "notification.open", payload: { data: "d" } });
++
++    expect(received).toEqual([{ data: "a" }, { data: "b" }, { data: "c" }]);
++  });
++
++  it("ignores messages that are not from the shell", () => {
++    const harness = createHarness();
++    harness.channel.connect();
++    const received: unknown[] = [];
++    harness.channel.on("back", (payload) => received.push(payload));
++
++    harness.channel.receive("not json");
++    harness.deliver({ type: "back" });
++
++    expect(received).toEqual([]);
++  });
++});
++
++class FakeDocument extends EventTarget {
++  nativeHidden = false;
++
++  get visibilityState(): DocumentVisibilityState {
++    return this.nativeHidden ? "hidden" : "visible";
++  }
++
++  get hidden(): boolean {
++    return this.nativeHidden;
++  }
++}
++
++describe("installHostVisibility", () => {
++  it("follows the web view until the shell reports, then the shell", () => {
++    const doc = new FakeDocument();
++    const visibility = installHostVisibility(doc);
++    const events: string[] = [];
++    doc.addEventListener("visibilitychange", () => events.push(doc.visibilityState));
++
++    doc.nativeHidden = true;
++    expect(doc.visibilityState).toBe("hidden");
++    doc.nativeHidden = false;
++
++    visibility.setHostState("background");
++    expect(doc.visibilityState).toBe("hidden");
++    expect(doc.hidden).toBe(true);
++
++    // The web view itself still claims to be visible; the shell wins.
++    visibility.setHostState("background");
++    visibility.setHostState("active");
++
++    expect(doc.hidden).toBe(false);
++    expect(events).toEqual(["hidden", "visible"]);
++  });
++});
+diff --git a/packages/app/src/harmony/host.ts b/packages/app/src/harmony/host.ts
+new file mode 100644
+index 000000000..caf33a819
+--- /dev/null
++++ b/packages/app/src/harmony/host.ts
+@@ -0,0 +1,237 @@
++/**
++ * The page side of the HarmonyOS shell bridge.
++ *
++ * The HarmonyOS app is an ArkWeb shell around this web build (repo paseo-harmony,
++ * entry/src/main/ets/shell/Bridge.ets). The shell injects `window.paseoHarmony` and answers
++ * by calling `window.__paseoHarmonyReceive`; the message shapes here and there have to agree.
++ *
++ * Only `*.harmony.ts` modules import this. A build with PASEO_WEB_PLATFORM=harmony resolves
++ * them; every other platform never loads it.
++ */
++
++export interface HarmonyBridgeObject {
++  post(message: string): void;
++  hostInfo(): string;
++}
++
++export interface HarmonyHostInfo {
++  shell: "harmony";
++  shellVersion: string;
++  shellVersionCode: number;
++  debug: boolean;
++  deviceType: string;
++  osFullName: string;
++  apiVersion: number;
++  canScan: boolean;
++  bundleStamp: string;
++  foreground: boolean;
++  backgroundActive: boolean;
++  notificationsEnabled: boolean;
++}
++
++interface HostResponse {
++  kind: "response";
++  id: number;
++  ok: boolean;
++  result: unknown;
++  error: string | null;
++}
++
++interface HostEvent {
++  kind: "event";
++  type: string;
++  payload: unknown;
++}
++
++type HostMessage = HostResponse | HostEvent;
++
++export interface HarmonyRequestOptions {
++  /** `null` waits indefinitely, for requests that wait on a person (scanning, pickers). */
++  timeoutMs?: number | null;
++}
++
++export interface HarmonyChannelEnvironment {
++  bridge: () => HarmonyBridgeObject | null;
++  installReceiver: (receive: (message: string) => void) => void;
++  setTimer: (callback: () => void, ms: number) => unknown;
++  clearTimer: (handle: unknown) => void;
++}
++
++type EventListener = (payload: unknown) => void;
++
++interface PendingRequest {
++  resolve: (value: unknown) => void;
++  reject: (error: Error) => void;
++  timer: unknown;
++}
++
++const DEFAULT_TIMEOUT_MS = 30_000;
++// Events nobody listens to yet are held, because a notification tap that cold-starts the app
++// arrives before the screen that routes it has mounted.
++const MAX_BUFFERED_EVENTS = 32;
++
++function isHostMessage(value: unknown): value is HostMessage {
++  if (typeof value !== "object" || value === null) return false;
++  const kind = (value as { kind?: unknown }).kind;
++  return kind === "response" || kind === "event";
++}
++
++export class HarmonyChannel {
++  private readonly env: HarmonyChannelEnvironment;
++  private nextId = 1;
++  private connected = false;
++  private readonly pending = new Map<number, PendingRequest>();
++  private readonly listeners = new Map<string, Set<EventListener>>();
++  private buffered: HostEvent[] = [];
++
++  constructor(env: HarmonyChannelEnvironment) {
++    this.env = env;
++  }
++
++  isAvailable(): boolean {
++    return this.env.bridge() !== null;
++  }
++
++  /** Installs the receiver and tells the shell the page can take events. Idempotent. */
++  connect(): boolean {
++    const bridge = this.env.bridge();
++    if (!bridge) return false;
++    if (this.connected) return true;
++    this.connected = true;
++    this.env.installReceiver((message) => this.receive(message));
++    bridge.post(JSON.stringify({ id: 0, type: "ready" }));
++    return true;
++  }
++
++  hostInfo(): HarmonyHostInfo | null {
++    const bridge = this.env.bridge();
++    if (!bridge) return null;
++    try {
++      return JSON.parse(bridge.hostInfo()) as HarmonyHostInfo;
++    } catch {
++      return null;
++    }
++  }
++
++  request<T>(type: string, payload?: unknown, options: HarmonyRequestOptions = {}): Promise<T> {
++    const bridge = this.env.bridge();
++    if (!bridge) {
++      return Promise.reject(new Error("The HarmonyOS shell is not available"));
++    }
++    // Answers come back through the receiver, so it has to be in place before anything is asked.
++    this.connect();
++    const id = this.nextId++;
++    const timeoutMs = options.timeoutMs === undefined ? DEFAULT_TIMEOUT_MS : options.timeoutMs;
++    return new Promise<T>((resolve, reject) => {
++      const timer =
++        timeoutMs === null
++          ? null
++          : this.env.setTimer(() => {
++              this.pending.delete(id);
++              reject(new Error(`HarmonyOS shell did not answer ${type}`));
++            }, timeoutMs);
++      this.pending.set(id, {
++        resolve: (value) => resolve(value as T),
++        reject,
++        timer,
++      });
++      try {
++        bridge.post(JSON.stringify({ id, type, payload }));
++      } catch (error) {
++        this.settle(id);
++        reject(error instanceof Error ? error : new Error(String(error)));
++      }
++    });
++  }
++
++  /** A request nobody waits on. */
++  send(type: string, payload?: unknown): void {
++    const bridge = this.env.bridge();
++    if (!bridge) return;
++    this.connect();
++    try {
++      bridge.post(JSON.stringify({ id: 0, type, payload }));
++    } catch {
++      // The shell is gone; there is nobody to tell.
++    }
++  }
++
++  on(type: string, listener: EventListener): () => void {
++    // The shell holds its events until the page says it is ready, and a listener is the first
++    // sign that it is.
++    this.connect();
++    let set = this.listeners.get(type);
++    if (!set) {
++      set = new Set();
++      this.listeners.set(type, set);
++    }
++    set.add(listener);
++
++    const replay = this.buffered.filter((event) => event.type === type);
++    if (replay.length > 0) {
++      this.buffered = this.buffered.filter((event) => event.type !== type);
++      for (const event of replay) listener(event.payload);
++    }
++
++    return () => {
++      set?.delete(listener);
++    };
++  }
++
++  receive(message: string): void {
++    let parsed: unknown;
++    try {
++      parsed = JSON.parse(message);
++    } catch {
++      return;
++    }
++    if (!isHostMessage(parsed)) return;
++
++    if (parsed.kind === "response") {
++      const pending = this.settle(parsed.id);
++      if (!pending) return;
++      if (parsed.ok) {
++        pending.resolve(parsed.result);
++      } else {
++        pending.reject(new Error(parsed.error ?? "HarmonyOS shell request failed"));
++      }
++      return;
++    }
++
++    const listeners = this.listeners.get(parsed.type);
++    if (!listeners || listeners.size === 0) {
++      this.buffered.push(parsed);
++      if (this.buffered.length > MAX_BUFFERED_EVENTS) this.buffered.shift();
++      return;
++    }
++    // A copy, so a listener that unsubscribes while it runs does not skip the next one.
++    for (const listener of Array.from(listeners)) listener(parsed.payload);
++  }
++
++  private settle(id: number): PendingRequest | undefined {
++    const pending = this.pending.get(id);
++    if (!pending) return undefined;
++    this.pending.delete(id);
++    if (pending.timer !== null) this.env.clearTimer(pending.timer);
++    return pending;
++  }
++}
++
++interface HarmonyGlobal {
++  paseoHarmony?: HarmonyBridgeObject;
++  __paseoHarmonyReceive?: (message: string) => void;
++}
++
++function harmonyGlobal(): HarmonyGlobal | null {
++  return typeof window === "undefined" ? null : (window as unknown as HarmonyGlobal);
++}
++
++export const harmonyHost = new HarmonyChannel({
++  bridge: () => harmonyGlobal()?.paseoHarmony ?? null,
++  installReceiver: (receive) => {
++    const target = harmonyGlobal();
++    if (target) target.__paseoHarmonyReceive = receive;
++  },
++  setTimer: (callback, ms) => setTimeout(callback, ms),
++  clearTimer: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
++});
+diff --git a/packages/app/src/harmony/notifications.test.ts b/packages/app/src/harmony/notifications.test.ts
+new file mode 100644
+index 000000000..8b0b1f927
+--- /dev/null
++++ b/packages/app/src/harmony/notifications.test.ts
+@@ -0,0 +1,57 @@
++import { describe, expect, it } from "vitest";
++import { addHarmonyBackHandler, runHarmonyBackHandlers } from "./back";
++import { isUrgentNotification, notificationKey, parseNotificationTapData } from "./notifications";
++
++describe("HarmonyOS notifications", () => {
++  it("keys an alert by its agent or terminal, so a newer one replaces the older", () => {
++    const finished = {
++      title: "Fix tests",
++      data: { serverId: "srv", agentId: "a1", reason: "finished" },
++    };
++    const permission = {
++      title: "Fix tests",
++      data: { serverId: "srv", agentId: "a1", reason: "permission" },
++    };
++    const terminal = { title: "npm test", data: { serverId: "srv", terminalId: "t1" } };
++
++    expect(notificationKey(finished)).toBe(notificationKey(permission));
++    expect(notificationKey(terminal)).toBe("srv:t1");
++    expect(notificationKey({ title: "Paseo" })).toBe(":Paseo");
++  });
++
++  it("rings only for a permission request", () => {
++    expect(isUrgentNotification({ title: "x", data: { reason: "permission" } })).toBe(true);
++    expect(isUrgentNotification({ title: "x", data: { reason: "finished" } })).toBe(false);
++    expect(isUrgentNotification({ title: "x" })).toBe(false);
++  });
++
++  it("reads back the data a tap carries, and nothing else", () => {
++    const data = { serverId: "srv", agentId: "a1", reason: "finished" };
++
++    expect(parseNotificationTapData({ data: JSON.stringify(data) })).toEqual(data);
++    expect(parseNotificationTapData({ data: "[1]" })).toBeUndefined();
++    expect(parseNotificationTapData({ data: "{" })).toBeUndefined();
++    expect(parseNotificationTapData(null)).toBeUndefined();
++  });
++});
++
++describe("HarmonyOS back gesture", () => {
++  it("asks the newest handler first and stops at the first that consumes the press", () => {
++    const calls: string[] = [];
++    const stopOuter = addHarmonyBackHandler(() => {
++      calls.push("outer");
++      return true;
++    });
++    const stopInner = addHarmonyBackHandler(() => {
++      calls.push("inner");
++      return false;
++    });
++
++    expect(runHarmonyBackHandlers()).toBe(true);
++    expect(calls).toEqual(["inner", "outer"]);
++
++    stopOuter();
++    stopInner();
++    expect(runHarmonyBackHandlers()).toBe(false);
++  });
++});
+diff --git a/packages/app/src/harmony/notifications.ts b/packages/app/src/harmony/notifications.ts
+new file mode 100644
+index 000000000..0b7b79eb1
+--- /dev/null
++++ b/packages/app/src/harmony/notifications.ts
+@@ -0,0 +1,72 @@
++import { harmonyHost } from "./host";
++
++export interface HarmonyNotification {
++  title: string;
++  body?: string;
++  data?: Record<string, unknown>;
++}
++
++function stringField(data: Record<string, unknown> | undefined, key: string): string | null {
++  const value = data?.[key];
++  return typeof value === "string" && value.length > 0 ? value : null;
++}
++
++/**
++ * One notification per agent or terminal: a newer alert replaces the older one instead of
++ * stacking, the way a push for the same agent collapses on Android.
++ */
++export function notificationKey(notification: HarmonyNotification): string {
++  const serverId = stringField(notification.data, "serverId") ?? "";
++  const subject =
++    stringField(notification.data, "agentId") ??
++    stringField(notification.data, "terminalId") ??
++    notification.title;
++  return `${serverId}:${subject}`;
++}
++
++/** A permission request blocks an agent until someone answers, so it rings. */
++export function isUrgentNotification(notification: HarmonyNotification): boolean {
++  return stringField(notification.data, "reason") === "permission";
++}
++
++export async function presentHarmonyNotification(
++  notification: HarmonyNotification,
++): Promise<boolean> {
++  try {
++    const result = await harmonyHost.request<{ presented: boolean }>("notifications.present", {
++      key: notificationKey(notification),
++      title: notification.title,
++      body: notification.body ?? "",
++      // Handed back untouched on a tap, and routed like a browser notification click.
++      data: JSON.stringify(notification.data ?? {}),
++      urgent: isUrgentNotification(notification),
++    });
++    return result.presented;
++  } catch (error) {
++    console.warn("[HarmonyNotifications] Failed to present", error);
++    return false;
++  }
++}
++
++export async function requestHarmonyNotificationPermission(): Promise<boolean> {
++  try {
++    const result = await harmonyHost.request<{ enabled: boolean }>("notifications.request");
++    return result.enabled;
++  } catch {
++    return false;
++  }
++}
++
++/** Notification taps carry back the JSON this page handed over. */
++export function parseNotificationTapData(payload: unknown): Record<string, unknown> | undefined {
++  const raw = (payload as { data?: unknown } | null)?.data;
++  if (typeof raw !== "string") return undefined;
++  try {
++    const parsed: unknown = JSON.parse(raw);
++    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
++      ? (parsed as Record<string, unknown>)
++      : undefined;
++  } catch {
++    return undefined;
++  }
++}
+diff --git a/packages/app/src/harmony/variant.ts b/packages/app/src/harmony/variant.ts
+new file mode 100644
+index 000000000..eface17a0
+--- /dev/null
++++ b/packages/app/src/harmony/variant.ts
+@@ -0,0 +1,10 @@
++/**
++ * Fails the typecheck when a `*.harmony.ts` variant lacks an export of the module it replaces.
++ *
++ * Metro swaps the whole file, and TypeScript only ever sees the base, so a missing export would
++ * otherwise surface as `undefined` at runtime in the HarmonyOS build alone. Call it with the base
++ * module's type and the variant's own:
++ *
++ *   assertCoversExports<typeof Base, typeof import("./thing.harmony")>();
++ */
++export function assertCoversExports<Base, _Variant extends { [K in keyof Base]: unknown }>(): void {}
+diff --git a/packages/app/src/harmony/visibility.ts b/packages/app/src/harmony/visibility.ts
+new file mode 100644
+index 000000000..97a146a6a
+--- /dev/null
++++ b/packages/app/src/harmony/visibility.ts
+@@ -0,0 +1,63 @@
++/**
++ * Makes the page's visibility follow the HarmonyOS app lifecycle.
++ *
++ * The app reads presence from the document: react-native-web's AppState listens for
++ * `visibilitychange`, and through it the client activity tracker and the alert decision know
++ * whether Paseo is in front. A web view inside a backgrounded app does not reliably go hidden,
++ * so without this the daemon would see the phone as present while it sits in a pocket, keep its
++ * alerts in-app, and nothing would ever reach the notification shade.
++ *
++ * Until the shell reports a state, the web view's own visibility stands.
++ */
++
++type VisibilityState = "visible" | "hidden";
++
++interface VisibilityDocument extends EventTarget {
++  visibilityState: DocumentVisibilityState;
++  hidden: boolean;
++}
++
++export interface HostVisibility {
++  setHostState(state: "active" | "background"): void;
++}
++
++function readOwnGetter<T>(doc: object, property: string): (() => T) | null {
++  let prototype: object | null = Object.getPrototypeOf(doc);
++  while (prototype) {
++    const descriptor = Object.getOwnPropertyDescriptor(prototype, property);
++    if (descriptor?.get) {
++      const getter = descriptor.get;
++      return () => getter.call(doc) as T;
++    }
++    prototype = Object.getPrototypeOf(prototype);
++  }
++  return null;
++}
++
++export function installHostVisibility(doc: VisibilityDocument): HostVisibility {
++  const nativeState = readOwnGetter<DocumentVisibilityState>(doc, "visibilityState");
++  let hostState: VisibilityState | null = null;
++
++  const current = (): VisibilityState => {
++    if (hostState !== null) return hostState;
++    return nativeState?.() === "hidden" ? "hidden" : "visible";
++  };
++
++  Object.defineProperty(doc, "visibilityState", {
++    configurable: true,
++    get: current,
++  });
++  Object.defineProperty(doc, "hidden", {
++    configurable: true,
++    get: () => current() === "hidden",
++  });
++
++  return {
++    setHostState(state) {
++      const next: VisibilityState = state === "active" ? "visible" : "hidden";
++      const before = current();
++      hostState = next;
++      if (before !== next) doc.dispatchEvent(new Event("visibilitychange"));
++    },
++  };
++}
+diff --git a/packages/app/src/hosts/system-qr-scanner.harmony.ts b/packages/app/src/hosts/system-qr-scanner.harmony.ts
+new file mode 100644
+index 000000000..bcd6cb9b7
+--- /dev/null
++++ b/packages/app/src/hosts/system-qr-scanner.harmony.ts
+@@ -0,0 +1,21 @@
++import { assertCoversExports } from "@/harmony/variant";
++import { harmonyHost } from "@/harmony/host";
++import type * as Base from "./system-qr-scanner";
++
++export type SystemQrScanner = Base.SystemQrScanner;
++
++const scanWithShell: SystemQrScanner = async () => {
++  const result = await harmonyHost.request<{ value: string | null }>("scan.qr", undefined, {
++    // The scanner stays up for as long as the person keeps it up.
++    timeoutMs: null,
++  });
++  return result.value;
++};
++
++/** Scan Kit, through the shell. Some 2in1 devices have none, and the shell says so. */
++export const getSystemQrScanner: typeof Base.getSystemQrScanner = () =>
++  harmonyHost.hostInfo()?.canScan === true ? scanWithShell : null;
++
++export const canScanPairingQr: typeof Base.canScanPairingQr = () => getSystemQrScanner() !== null;
++
++assertCoversExports<typeof Base, typeof import("./system-qr-scanner.harmony")>();
+diff --git a/packages/app/src/hosts/system-qr-scanner.ts b/packages/app/src/hosts/system-qr-scanner.ts
+new file mode 100644
+index 000000000..3b8e724aa
+--- /dev/null
++++ b/packages/app/src/hosts/system-qr-scanner.ts
+@@ -0,0 +1,18 @@
++import { isFdroidBuild } from "@/constants/build-profile";
++import { isNative } from "@/constants/platform";
++
++/** Resolves the scanned text, or null when the person backs out. */
++export type SystemQrScanner = () => Promise<string | null>;
++
++/**
++ * A scanner the platform shows on its own, outside the app's camera view. Only the HarmonyOS
++ * shell has one (system-qr-scanner.harmony.ts); native builds scan with expo-camera instead.
++ */
++export function getSystemQrScanner(): SystemQrScanner | null {
++  return null;
++}
++
++/** Whether this build can pair a host by scanning its QR code. */
++export function canScanPairingQr(): boolean {
++  return (isNative && !isFdroidBuild) || getSystemQrScanner() !== null;
++}
+diff --git a/packages/app/src/screens/workspace/workspace-desktop-tabs-row.tsx b/packages/app/src/screens/workspace/workspace-desktop-tabs-row.tsx
+index f7645ac16..7a36cd72d 100644
+--- a/packages/app/src/screens/workspace/workspace-desktop-tabs-row.tsx
++++ b/packages/app/src/screens/workspace/workspace-desktop-tabs-row.tsx
+@@ -36,6 +36,7 @@ import type {
+   DraggableRenderItemInfo,
+ } from "@/components/draggable-list.types";
+ import { isNative, isWeb } from "@/constants/platform";
++import { useHasFinePointer } from "@/hooks/use-fine-pointer";
+ import {
+   ContextMenu,
+   ContextMenuContent,
+@@ -778,7 +779,9 @@ function TabChip({
+     isActiveFocused,
+     isFilled,
+   });
+-  const showCloseControl = showCloseButton && (isHovered || isNative || isCompact || isClosingTab);
++  const hasFinePointer = useHasFinePointer();
++  const showCloseControl =
++    showCloseButton && (isHovered || !hasFinePointer || isCompact || isClosingTab);
+   const closeButtonDragBlockers = isWeb
+     ? ({
+         onPointerDown: (event: { stopPropagation?: () => void }) => {
+diff --git a/packages/app/src/screens/workspace/workspace-screen.tsx b/packages/app/src/screens/workspace/workspace-screen.tsx
+index bcc259361..6250b9d54 100644
+--- a/packages/app/src/screens/workspace/workspace-screen.tsx
++++ b/packages/app/src/screens/workspace/workspace-screen.tsx
+@@ -31,7 +31,7 @@ import {
+ } from "react";
+ import { useStoreWithEqualityFn } from "zustand/traditional";
+ import { useIsFocused } from "expo-router/react-navigation";
+-import { BackHandler, Text, View } from "react-native";
++import { Text, View } from "react-native";
+ import { useQueryClient } from "@tanstack/react-query";
+ import { useRouter, type Href } from "expo-router";
+ import * as Clipboard from "expo-clipboard";
+@@ -219,6 +219,7 @@ import {
+   type WorkspaceFileOpenRequest,
+ } from "@/workspace/file-open";
+ import { RenderProfile } from "@/utils/render-profiler";
++import { systemBackPress } from "@/components/ui/isolated-bottom-sheet-modal/back-press";
+ import { useWorkspaceCheckoutStatus } from "@/screens/workspace/use-workspace-checkout-status";
+ import { useWorkspacePullRequestDiscovery } from "@/panels/pull-request";
+ 
+@@ -1275,16 +1276,15 @@ function WorkspaceScreenContent({
+     // Back dismisses the compact overlay only. On a wide native layout the
+     // explorer is a tab, `showMobileAgent` has no rendered consumer, and
+     // returning true would swallow Back with nothing to show for it.
+-    if (!isRouteFocused || isWeb || !isMobile || !isExplorerSidebarShowing) {
++    if (!isRouteFocused || !isMobile || !isExplorerSidebarShowing) {
+       return;
+     }
+ 
+-    const handler = BackHandler.addEventListener("hardwareBackPress", () => {
++    // Android's hardware Back, or the HarmonyOS back gesture; nothing in a browser.
++    return systemBackPress.subscribe(() => {
+       showMobileAgent();
+       return true;
+     });
+-
+-    return () => handler.remove();
+   }, [isExplorerSidebarShowing, isMobile, isRouteFocused, showMobileAgent]);
+ 
+   const workspaceLayout = useWorkspaceLayoutStore((state) =>
+diff --git a/packages/app/src/subagents/track.tsx b/packages/app/src/subagents/track.tsx
+index d759da431..7cb38ad33 100644
+--- a/packages/app/src/subagents/track.tsx
++++ b/packages/app/src/subagents/track.tsx
+@@ -10,7 +10,7 @@ import { ComposerTrackActions, ComposerTrackPill, ComposerTrackRow } from "@/com
+ import { mutedIconColorMapping } from "@/components/ui/icon-button-chrome";
+ import { ToolbarButton, paneContentToolbarIconSize } from "@/components/ui/pane-content-toolbar";
+ import { useIsCompactFormFactor } from "@/constants/layout";
+-import { isNative } from "@/constants/platform";
++import { useHasFinePointer } from "@/hooks/use-fine-pointer";
+ import {
+   WorkspaceTabIcon,
+   type WorkspaceTabPresentation,
+@@ -218,7 +218,8 @@ function SubagentsTrackRow({
+   const handleDetachPress = useCallback(() => {
+     if (row.kind === "paseo") onDetachSubagent?.(row.address);
+   }, [onDetachSubagent, row]);
+-  const actionsAlwaysVisible = isNative || isCompact;
++  const hasFinePointer = useHasFinePointer();
++  const actionsAlwaysVisible = !hasFinePointer || isCompact;
+ 
+   const renderRow = useCallback(
+     ({ active }: { active: boolean }) => (
+diff --git a/packages/app/src/usage/card.tsx b/packages/app/src/usage/card.tsx
+index 7d0f9903d..7f18fd302 100644
+--- a/packages/app/src/usage/card.tsx
++++ b/packages/app/src/usage/card.tsx
+@@ -12,7 +12,7 @@ import { LoadingSpinner } from "@/components/ui/loading-spinner";
+ import { ToolbarButton, paneContentToolbarIconSize } from "@/components/ui/pane-content-toolbar";
+ import { StatusBadge } from "@/components/ui/status-badge";
+ import { useIsCompactFormFactor } from "@/constants/layout";
+-import { isNative } from "@/constants/platform";
++import { useHasFinePointer } from "@/hooks/use-fine-pointer";
+ import type { TFunction } from "i18next";
+ import { UsageBalanceBar } from "./balance-bar";
+ import type { UsageDisplay } from "./display";
+@@ -57,7 +57,8 @@ export function UsageCard({
+   const isCompact = useIsCompactFormFactor();
+   const { refresh, refreshState } = useReportRefresh(serverId, entry.id, agentId);
+   // Where there is no hover the freshness is printed on the card; elsewhere the Refresh tooltip.
+-  const showsFreshnessInline = isNative || isCompact || !refreshable;
++  const hasFinePointer = useHasFinePointer();
++  const showsFreshnessInline = !hasFinePointer || isCompact || !refreshable;
+   const usage = entry.report;
+   const status = statusText(usage, t);
+   const footer = entry.account.label ?? null;
+diff --git a/packages/app/src/utils/keep-awake.harmony.ts b/packages/app/src/utils/keep-awake.harmony.ts
+new file mode 100644
+index 000000000..62fd3337a
+--- /dev/null
++++ b/packages/app/src/utils/keep-awake.harmony.ts
+@@ -0,0 +1,21 @@
++import { assertCoversExports } from "@/harmony/variant";
++import { harmonyHost } from "@/harmony/host";
++import type * as Base from "./keep-awake";
++
++// The window stays on while any tag holds it, the way expo-keep-awake counts tags.
++const tags = new Set<string>();
++
++export const activateKeepAwakeAsync: typeof Base.activateKeepAwakeAsync = async (
++  tag = "default",
++) => {
++  tags.add(tag);
++  await harmonyHost.request("screen.keepOn", { on: true });
++};
++
++export const deactivateKeepAwake: typeof Base.deactivateKeepAwake = async (tag = "default") => {
++  tags.delete(tag);
++  if (tags.size > 0) return;
++  await harmonyHost.request("screen.keepOn", { on: false });
++};
++
++assertCoversExports<typeof Base, typeof import("./keep-awake.harmony")>();
+diff --git a/packages/app/src/utils/keep-awake.ts b/packages/app/src/utils/keep-awake.ts
+new file mode 100644
+index 000000000..cba32b0b6
+--- /dev/null
++++ b/packages/app/src/utils/keep-awake.ts
+@@ -0,0 +1,3 @@
++// The HarmonyOS shell keeps the screen on through its window (keep-awake.harmony.ts); every other
++// platform uses expo-keep-awake, which is the Screen Wake Lock API on the web.
++export { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
+diff --git a/packages/app/src/utils/open-external-url.harmony.ts b/packages/app/src/utils/open-external-url.harmony.ts
+new file mode 100644
+index 000000000..865540c15
+--- /dev/null
++++ b/packages/app/src/utils/open-external-url.harmony.ts
+@@ -0,0 +1,16 @@
++import { assertCoversExports } from "@/harmony/variant";
++import { harmonyHost } from "@/harmony/host";
++import { isHttpUrl } from "./http-url";
++import type * as Base from "./open-external-url";
++
++/** The shell hands the link to the system, which opens the default browser. */
++export const openExternalUrl: typeof Base.openExternalUrl = async (url) => {
++  if (!isHttpUrl(url)) return;
++  try {
++    await harmonyHost.request("links.open", { url });
++  } catch (error) {
++    console.warn("[HarmonyLinks] Failed to open", error);
++  }
++};
++
++assertCoversExports<typeof Base, typeof import("./open-external-url.harmony")>();
+diff --git a/packages/app/src/utils/os-notifications.harmony.ts b/packages/app/src/utils/os-notifications.harmony.ts
+new file mode 100644
+index 000000000..65690d168
+--- /dev/null
++++ b/packages/app/src/utils/os-notifications.harmony.ts
+@@ -0,0 +1,24 @@
++import { assertCoversExports } from "@/harmony/variant";
++import {
++  presentHarmonyNotification,
++  requestHarmonyNotificationPermission,
++} from "@/harmony/notifications";
++import type * as Base from "./os-notifications";
++
++export type WebNotificationClickDetail = Base.WebNotificationClickDetail;
++
++// Raised by browser notification clicks; HarmonyHostSync raises it for the shell's taps.
++export const WEB_NOTIFICATION_CLICK_EVENT = "paseo:web-notification-click";
++
++export const ensureOsNotificationPermission: typeof Base.ensureOsNotificationPermission = () =>
++  requestHarmonyNotificationPermission();
++
++/**
++ * HarmonyOS has no push for Paseo, so every alert the page decides to show is a local
++ * notification from the shell. In the background that only happens while the continuous task
++ * keeps the page alive; without it the system freezes the page and nothing runs at all.
++ */
++export const sendOsNotification: typeof Base.sendOsNotification = (payload) =>
++  presentHarmonyNotification(payload);
++
++assertCoversExports<typeof Base, typeof import("./os-notifications.harmony")>();
+diff --git a/packages/app/src/workspace-labels/manager-modal.tsx b/packages/app/src/workspace-labels/manager-modal.tsx
+index a23e7e092..2091bdc03 100644
+--- a/packages/app/src/workspace-labels/manager-modal.tsx
++++ b/packages/app/src/workspace-labels/manager-modal.tsx
+@@ -20,7 +20,7 @@ import { Button } from "@/components/ui/button";
+ import type { FieldControlSize } from "@/components/ui/control-geometry";
+ import { Field, FormTextInput } from "@/components/ui/form-field";
+ import { useIsCompactFormFactor } from "@/constants/layout";
+-import { isNative } from "@/constants/platform";
++import { useHasFinePointer } from "@/hooks/use-fine-pointer";
+ import { useHosts } from "@/runtime/host-runtime";
+ import type { Theme } from "@/styles/theme";
+ import { confirmDialog } from "@/utils/confirm-dialog";
+@@ -251,7 +251,8 @@ function WorkspaceLabelManagerRow({
+   const handlePointerEnter = useCallback(() => setIsHovered(true), []);
+   const handlePointerLeave = useCallback(() => setIsHovered(false), []);
+   const edit = useCallback(() => onEdit(label), [label, onEdit]);
+-  const revealed = isHovered || isNative || isCompact;
++  const hasFinePointer = useHasFinePointer();
++  const revealed = isHovered || !hasFinePointer || isCompact;
+   const editStyle = useCallback(
+     ({ pressed }: PressableStateCallbackType) => [
+       styles.rowEdit,
+-- 
+2.50.1 (Apple Git-155)
+

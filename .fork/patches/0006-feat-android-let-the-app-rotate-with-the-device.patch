@@ -1,7 +1,7 @@
-From 1dbbd27cf5f2be5bed7379a3c77eed94338e8325 Mon Sep 17 00:00:00 2001
+From 5963b6024b94ab4b48883dd5009b671231c6548a Mon Sep 17 00:00:00 2001
 From: Vincent Leon <leon@mbp.com>
 Date: Thu, 22 Oct 2026 22:57:29 +0800
-Subject: [PATCH 6/7] feat(android): let the app rotate with the device
+Subject: [PATCH 06/11] feat(android): let the app rotate with the device
 
 The app locks to portrait, which also locks an unfolded foldable or a
 tablet, including the Android build running under HarmonyOS's Android

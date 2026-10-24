@@ -1,0 +1,1031 @@
+From f17a60f96efbea6ee43cf184b260e70554ad485e Mon Sep 17 00:00:00 2001
+From: Vincent Leon <leon@mbp.com>
+Date: Wed, 19 Aug 2026 09:34:41 +0800
+Subject: [PATCH 08/11] Make push delivery pluggable
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Push delivery is hardcoded to Expo, so there is no way to add a second channel
+without editing the send path. That blocks any platform Expo cannot reach —
+HarmonyOS is the case in front of me, but the shape of the problem is not
+specific to it.
+
+This adds the seam and moves the existing Expo path behind it. Behaviour is
+unchanged: same endpoint, same batch size, same ticket handling, same tokens on
+disk. Adding a provider is now a directory under push/providers/ plus one line
+in the manifest.
+
+Two decisions worth reviewing:
+
+Providers return dead tokens rather than revoking them. The store treats a
+revocation as real only once it is durable — persist() throws on a write failure
+and the caller keeps the previous state — and a provider holding a revoke
+callback cannot honour that, so it would drop tokens that are still live on
+disk. PushDeliveryResult.revokedTokens keeps that decision in the store.
+
+Non-Expo tokens are stored under a separate `providers` key rather than in the
+existing `subscriptions` array with a provider field. An older daemon reading
+the same PASEO_HOME — a rollback, a downgrade, a parallel install — understands
+`subscriptions` and ignores what it does not know, so it can never POST a
+non-Expo token to Expo, and never revoke one off the back of an Expo ticket
+error. A flat list with an added field loses that: the field is dropped on read
+and erased on the next write.
+
+The protocol carries an optional `provider` on register/unregister, and
+server_info advertises `features.pushProviders` so a client only registers a
+token for a channel this host can route. Absent provider means Expo, which is
+the only thing it can have been.
+
+One thing to note for future interface changes: the push mock in
+websocket-server.relay-reconnect.test.ts is a vi.mock factory literal, which
+TypeScript does not check against PushNotifications. Adding a method to the
+interface broke it at runtime with no compile error. It is typed now.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+---
+ packages/protocol/src/messages.ts             |  11 ++
+ packages/server/src/server/push/index.ts      |  86 +++++++--
+ packages/server/src/server/push/manifest.ts   |  16 ++
+ .../server/push/providers/expo/provider.ts    | 134 ++++++++++++++
+ .../server/src/server/push/push-provider.ts   |  61 +++++++
+ .../server/src/server/push/push-service.ts    | 109 ------------
+ .../src/server/push/token-store.test.ts       |  90 +++++++++-
+ .../server/src/server/push/token-store.ts     | 168 +++++++++++++-----
+ packages/server/src/server/session.ts         |  30 ++--
+ .../websocket-server.relay-reconnect.test.ts  |   4 +-
+ .../server/src/server/websocket-server.ts     |   4 +
+ 11 files changed, 528 insertions(+), 185 deletions(-)
+ create mode 100644 packages/server/src/server/push/manifest.ts
+ create mode 100644 packages/server/src/server/push/providers/expo/provider.ts
+ create mode 100644 packages/server/src/server/push/push-provider.ts
+ delete mode 100644 packages/server/src/server/push/push-service.ts
+
+diff --git a/packages/protocol/src/messages.ts b/packages/protocol/src/messages.ts
+index e09b416ea..2ec86c9ac 100644
+--- a/packages/protocol/src/messages.ts
++++ b/packages/protocol/src/messages.ts
+@@ -2950,12 +2950,18 @@ export const ListCommandsRequestSchema = z.object({
+ export const RegisterPushTokenMessageSchema = z.object({
+   type: z.literal("register_push_token"),
+   token: z.string(),
++  // COMPAT(pushProviders): added in v0.4.1, remove optional after 2027-02-01 once
++  // no client can still register a token without naming its delivery channel.
++  // Absent means Expo, which is the only channel that existed before this field.
++  provider: z.string().min(1).optional(),
+ });
+ 
+ export const PushUnregisterRequestSchema = z.object({
+   type: z.literal("push.unregister.request"),
+   token: z.string(),
+   requestId: z.string(),
++  // COMPAT(pushProviders): added in v0.4.1, remove optional after 2027-02-01.
++  provider: z.string().min(1).optional(),
+ });
+ 
+ export const PushUnregisterResponseSchema = z.object({
+@@ -3674,6 +3680,11 @@ export const ServerInfoStatusPayloadSchema = z
+         relayConfig: z.boolean().optional(),
+         // COMPAT(pushTokenRevocation): added in v0.3.2, remove gate after 2027-02-10.
+         pushTokenRevocation: z.boolean().optional(),
++        // Push channels this host can deliver through, e.g. ["expo"]. A client
++        // registers a token only for a provider listed here. Absent means the
++        // host predates pluggable providers and only speaks Expo.
++        // COMPAT(pushProviders): added in v0.4.1, remove gate after 2027-02-01.
++        pushProviders: z.array(z.string()).optional(),
+         // COMPAT(plugins): added in v0.3.0, remove gate after 2027-08-07.
+         plugins: z.boolean().optional(),
+         // COMPAT(pluginManagement): added in v0.4.0, remove gate after 2027-08-14.
+diff --git a/packages/server/src/server/push/index.ts b/packages/server/src/server/push/index.ts
+index 3f1a8e090..0cb29adf6 100644
+--- a/packages/server/src/server/push/index.ts
++++ b/packages/server/src/server/push/index.ts
+@@ -1,16 +1,28 @@
+ import type pino from "pino";
+ 
+-import { PushService, type PushPayload } from "./push-service.js";
++import { PUSH_PROVIDERS } from "./manifest.js";
++import type { PushPayload, PushProvider } from "./push-provider.js";
++import { EXPO_PROVIDER_ID } from "./providers/expo/provider.js";
+ import { PushTokenStore } from "./token-store.js";
+ 
+-export type { PushPayload };
++export type { PushPayload, PushProvider } from "./push-provider.js";
+ 
+ const PUSH_TOKEN_LEASE_MS = 48 * 60 * 60 * 1000;
+ 
++/**
++ * The channel a token belongs to when a client does not name one.
++ *
++ * COMPAT(pushProviders): every token registered before the provider field
++ * existed was an Expo token, because Expo was the only channel.
++ */
++export const DEFAULT_PUSH_PROVIDER = EXPO_PROVIDER_ID;
++
+ export interface PushNotifications {
+-  renew(token: string): void;
+-  revoke(token: string): void;
++  renew(token: string, provider?: string): void;
++  revoke(token: string, provider?: string): void;
+   send(payload: PushPayload): Promise<void>;
++  /** Provider ids this daemon can actually deliver through, for capability gating. */
++  listDeliverableProviders(): string[];
+ }
+ 
+ export type PushNotificationSender = Pick<PushNotifications, "send">;
+@@ -19,27 +31,69 @@ export function createPushNotifications(options: {
+   logger: pino.Logger;
+   filePath: string;
+   now?: () => number;
++  /** Per-provider configuration, keyed by provider id. */
++  providerConfig?: Record<string, unknown>;
++  /**
++   * Replaces delivery entirely, for tests. Bypasses every provider, so it also
++   * bypasses provider-reported revocations.
++   */
+   deliver?: (tokens: string[], payload: PushPayload) => Promise<void>;
+ }): PushNotifications {
+   const now = options.now ?? Date.now;
+   const store = new PushTokenStore(options.logger, options.filePath, now, PUSH_TOKEN_LEASE_MS);
+-  const service = new PushService(options.logger, (token) => store.revokeToken(token));
+-  const deliver =
+-    options.deliver ??
+-    ((tokens: string[], payload: PushPayload) => service.sendPush(tokens, payload));
++
++  const providers = new Map<string, PushProvider>();
++  for (const entry of PUSH_PROVIDERS) {
++    const provider = entry.create({
++      logger: options.logger,
++      config: options.providerConfig?.[entry.providerId],
++    });
++    // A null provider means this host holds no credentials for that channel.
++    if (provider) providers.set(entry.providerId, provider);
++  }
+ 
+   return {
+-    renew(token) {
+-      store.renewToken(token);
++    renew(token, provider = EXPO_PROVIDER_ID) {
++      store.renewToken(provider, token);
++    },
++    revoke(token, provider = EXPO_PROVIDER_ID) {
++      store.revokeToken(provider, token);
+     },
+-    revoke(token) {
+-      store.revokeToken(token);
++    listDeliverableProviders() {
++      return Array.from(providers.keys());
+     },
+     async send(payload) {
+-      const tokens = store.getActiveTokens();
+-      options.logger.info({ tokenCount: tokens.length }, "Sending push notification");
+-      if (tokens.length === 0) return;
+-      await deliver(tokens, payload);
++      const byProvider = store.getActiveTokensByProvider();
++      const tokenCount = Array.from(byProvider.values()).reduce(
++        (total, tokens) => total + tokens.length,
++        0,
++      );
++      options.logger.info({ tokenCount }, "Sending push notification");
++      if (tokenCount === 0) return;
++
++      if (options.deliver) {
++        await options.deliver(Array.from(byProvider.values()).flat(), payload);
++        return;
++      }
++
++      // One failing channel must not stop the others, so each is awaited
++      // independently and its revocations applied on its own.
++      await Promise.all(
++        Array.from(byProvider, async ([providerId, tokens]) => {
++          const provider = providers.get(providerId);
++          if (!provider) {
++            options.logger.warn(
++              { provider: providerId, tokenCount: tokens.length },
++              "No provider registered for stored tokens",
++            );
++            return;
++          }
++          const result = await provider.deliver(tokens, payload);
++          for (const token of result.revokedTokens ?? []) {
++            store.revokeToken(providerId, token);
++          }
++        }),
++      );
+     },
+   };
+ }
+diff --git a/packages/server/src/server/push/manifest.ts b/packages/server/src/server/push/manifest.ts
+new file mode 100644
+index 000000000..e38355b33
+--- /dev/null
++++ b/packages/server/src/server/push/manifest.ts
+@@ -0,0 +1,16 @@
++import { ExpoPushProvider, EXPO_PROVIDER_ID } from "./providers/expo/provider.js";
++import type { PushProviderManifestEntry } from "./push-provider.js";
++
++/**
++ * Every push channel the daemon knows about.
++ *
++ * Adding one is a new directory under providers/ plus one entry here. Nothing
++ * else in the push module should need to know a provider exists.
++ */
++export const PUSH_PROVIDERS: readonly PushProviderManifestEntry[] = [
++  {
++    providerId: EXPO_PROVIDER_ID,
++    // Always available: Expo needs no daemon-side credentials.
++    create: (options) => new ExpoPushProvider(options),
++  },
++];
+diff --git a/packages/server/src/server/push/providers/expo/provider.ts b/packages/server/src/server/push/providers/expo/provider.ts
+new file mode 100644
+index 000000000..bd4d1b21c
+--- /dev/null
++++ b/packages/server/src/server/push/providers/expo/provider.ts
+@@ -0,0 +1,134 @@
++import type pino from "pino";
++
++import type {
++  PushDeliveryResult,
++  PushPayload,
++  PushProvider,
++  PushProviderFactoryOptions,
++} from "../../push-provider.js";
++
++interface ExpoPushMessage {
++  to: string;
++  title: string;
++  body: string;
++  data?: Record<string, unknown>;
++  sound?: "default";
++}
++
++interface ExpoPushTicket {
++  status: "ok" | "error";
++  id?: string;
++  message?: string;
++  details?: { error?: string };
++}
++
++const DEFAULT_EXPO_PUSH_URL = "https://exp.host/--/api/v2/push/send";
++const MAX_BATCH_SIZE = 100;
++
++export const EXPO_PROVIDER_ID = "expo";
++
++interface ExpoProviderConfig {
++  /** Overridable so a test or a proxy deployment does not have to patch fetch. */
++  baseUrl?: string;
++}
++
++function readConfig(config: unknown): ExpoProviderConfig {
++  if (!config || typeof config !== "object") return {};
++  const candidate = config as { baseUrl?: unknown };
++  return typeof candidate.baseUrl === "string" && candidate.baseUrl.length > 0
++    ? { baseUrl: candidate.baseUrl }
++    : {};
++}
++
++/**
++ * Expo push delivery.
++ *
++ * Behaviour is unchanged from the previous PushService: same endpoint, same
++ * batch size, same ticket handling. The only difference is that dead tokens are
++ * returned instead of revoked through a callback, so the store decides when a
++ * revocation is durable.
++ */
++export class ExpoPushProvider implements PushProvider {
++  readonly providerId = EXPO_PROVIDER_ID;
++
++  private readonly logger: pino.Logger;
++  private readonly baseUrl: string;
++  private readonly fetchImpl: typeof fetch;
++
++  constructor(options: PushProviderFactoryOptions) {
++    this.logger = options.logger.child({ component: "push-provider", provider: EXPO_PROVIDER_ID });
++    this.baseUrl = readConfig(options.config).baseUrl ?? DEFAULT_EXPO_PUSH_URL;
++    this.fetchImpl = options.fetch ?? fetch;
++  }
++
++  async deliver(tokens: readonly string[], payload: PushPayload): Promise<PushDeliveryResult> {
++    if (tokens.length === 0) {
++      return {};
++    }
++
++    const messages: ExpoPushMessage[] = tokens.map((token) => ({
++      to: token,
++      title: payload.title,
++      body: payload.body,
++      data: payload.data,
++      sound: "default",
++    }));
++
++    const batches: ExpoPushMessage[][] = [];
++    for (let i = 0; i < messages.length; i += MAX_BATCH_SIZE) {
++      batches.push(messages.slice(i, i + MAX_BATCH_SIZE));
++    }
++
++    const revoked = await Promise.all(batches.map((batch) => this.sendBatch(batch)));
++    return { revokedTokens: revoked.flat() };
++  }
++
++  private async sendBatch(messages: ExpoPushMessage[]): Promise<string[]> {
++    try {
++      const response = await this.fetchImpl(this.baseUrl, {
++        method: "POST",
++        headers: {
++          "Content-Type": "application/json",
++          Accept: "application/json",
++        },
++        body: JSON.stringify(messages),
++      });
++
++      if (!response.ok) {
++        this.logger.error(
++          { status: response.status, statusText: response.statusText },
++          "Expo push API error",
++        );
++        return [];
++      }
++
++      const result = (await response.json()) as { data: ExpoPushTicket[] };
++      return this.collectRevoked(messages, result.data);
++    } catch (error) {
++      this.logger.error({ err: error }, "Failed to send push notifications");
++      return [];
++    }
++  }
++
++  private collectRevoked(messages: ExpoPushMessage[], tickets: ExpoPushTicket[]): string[] {
++    const revoked: string[] = [];
++    for (let i = 0; i < tickets.length; i++) {
++      const ticket = tickets[i];
++      const message = messages[i];
++      if (!ticket || !message || ticket.status !== "error") continue;
++
++      this.logger.error(
++        { token: message.to, message: ticket.message, details: ticket.details },
++        "Push failed for token",
++      );
++
++      if (
++        ticket.details?.error === "DeviceNotRegistered" ||
++        ticket.details?.error === "InvalidCredentials"
++      ) {
++        revoked.push(message.to);
++      }
++    }
++    return revoked;
++  }
++}
+diff --git a/packages/server/src/server/push/push-provider.ts b/packages/server/src/server/push/push-provider.ts
+new file mode 100644
+index 000000000..8b96ef837
+--- /dev/null
++++ b/packages/server/src/server/push/push-provider.ts
+@@ -0,0 +1,61 @@
++import type pino from "pino";
++
++export interface PushPayload {
++  title: string;
++  body: string;
++  data?: Record<string, unknown>;
++}
++
++/**
++ * A delivery channel for push notifications.
++ *
++ * Providers are stateless with respect to the token store: they are handed the
++ * tokens to deliver to and report back which ones the upstream service says are
++ * permanently gone. They never mutate the store themselves — see
++ * {@link PushDeliveryResult.revokedTokens} for why.
++ */
++export interface PushProvider {
++  /** Wire value, config key and manifest key. One name, no synonyms. */
++  readonly providerId: string;
++
++  /**
++   * Delivers to every token.
++   *
++   * Must not throw: one provider failing has to leave the others unaffected.
++   * Transport errors are the provider's own to log and swallow.
++   */
++  deliver(tokens: readonly string[], payload: PushPayload): Promise<PushDeliveryResult>;
++}
++
++export interface PushDeliveryResult {
++  /**
++   * Tokens the upstream service reports as permanently dead.
++   *
++   * Returned rather than revoked directly because the store only considers a
++   * revocation real once it is durable — `persist` throws on a write failure and
++   * the caller keeps the previous state. A provider holding a revoke callback
++   * cannot honour that, and would drop tokens that are still live on disk.
++   *
++   * Only permanent failures belong here. A timeout or a 500 is not one.
++   */
++  readonly revokedTokens?: readonly string[];
++}
++
++export interface PushProviderFactoryOptions {
++  readonly logger: pino.Logger;
++  /** The provider's own slice of persisted config; each provider validates its own. */
++  readonly config: unknown;
++  /** Injectable for tests; defaults to the global fetch. */
++  readonly fetch?: typeof fetch;
++}
++
++export interface PushProviderManifestEntry {
++  readonly providerId: string;
++  /**
++   * Builds the provider, or returns null when the daemon holds no credentials
++   * for it. A null provider is not an error: it means this host cannot deliver
++   * through that channel, which is what the client is told so it never
++   * registers a token nobody can route.
++   */
++  create(options: PushProviderFactoryOptions): PushProvider | null;
++}
+diff --git a/packages/server/src/server/push/push-service.ts b/packages/server/src/server/push/push-service.ts
+deleted file mode 100644
+index b91de5fbd..000000000
+--- a/packages/server/src/server/push/push-service.ts
++++ /dev/null
+@@ -1,109 +0,0 @@
+-import type pino from "pino";
+-
+-export interface PushPayload {
+-  title: string;
+-  body: string;
+-  data?: Record<string, unknown>;
+-}
+-
+-interface ExpoPushMessage {
+-  to: string;
+-  title: string;
+-  body: string;
+-  data?: Record<string, unknown>;
+-  sound?: "default";
+-}
+-
+-interface ExpoPushTicket {
+-  status: "ok" | "error";
+-  id?: string;
+-  message?: string;
+-  details?: { error?: string };
+-}
+-
+-const EXPO_PUSH_URL = "https://exp.host/--/api/v2/push/send";
+-const MAX_BATCH_SIZE = 100;
+-
+-/**
+- * Service for sending Expo push notifications.
+- * Handles batching and invalid token removal.
+- */
+-export class PushService {
+-  private readonly logger: pino.Logger;
+-  private readonly revokeToken: (token: string) => void;
+-
+-  constructor(logger: pino.Logger, revokeToken: (token: string) => void) {
+-    this.logger = logger.child({ component: "push-service" });
+-    this.revokeToken = revokeToken;
+-  }
+-
+-  async sendPush(tokens: string[], payload: PushPayload): Promise<void> {
+-    if (tokens.length === 0) {
+-      return;
+-    }
+-
+-    const messages: ExpoPushMessage[] = tokens.map((token) => ({
+-      to: token,
+-      title: payload.title,
+-      body: payload.body,
+-      data: payload.data,
+-      sound: "default",
+-    }));
+-
+-    // Batch tokens (max 100 per request per Expo limits)
+-    const batches: ExpoPushMessage[][] = [];
+-    for (let i = 0; i < messages.length; i += MAX_BATCH_SIZE) {
+-      batches.push(messages.slice(i, i + MAX_BATCH_SIZE));
+-    }
+-
+-    await Promise.all(batches.map((batch) => this.sendBatch(batch)));
+-  }
+-
+-  private async sendBatch(messages: ExpoPushMessage[]): Promise<void> {
+-    try {
+-      const response = await fetch(EXPO_PUSH_URL, {
+-        method: "POST",
+-        headers: {
+-          "Content-Type": "application/json",
+-          Accept: "application/json",
+-        },
+-        body: JSON.stringify(messages),
+-      });
+-
+-      if (!response.ok) {
+-        this.logger.error(
+-          { status: response.status, statusText: response.statusText },
+-          "Expo push API error",
+-        );
+-        return;
+-      }
+-
+-      const result = (await response.json()) as { data: ExpoPushTicket[] };
+-      this.handleTickets(messages, result.data);
+-    } catch (error) {
+-      this.logger.error({ err: error }, "Failed to send push notifications");
+-    }
+-  }
+-
+-  private handleTickets(messages: ExpoPushMessage[], tickets: ExpoPushTicket[]): void {
+-    for (let i = 0; i < tickets.length; i++) {
+-      const ticket = tickets[i];
+-      const message = messages[i];
+-
+-      if (ticket.status === "error") {
+-        this.logger.error(
+-          { token: message.to, message: ticket.message, details: ticket.details },
+-          "Push failed for token",
+-        );
+-
+-        // Remove invalid tokens
+-        if (
+-          ticket.details?.error === "DeviceNotRegistered" ||
+-          ticket.details?.error === "InvalidCredentials"
+-        ) {
+-          this.revokeToken(message.to);
+-        }
+-      }
+-    }
+-  }
+-}
+diff --git a/packages/server/src/server/push/token-store.test.ts b/packages/server/src/server/push/token-store.test.ts
+index afd7d601c..d21287e06 100644
+--- a/packages/server/src/server/push/token-store.test.ts
++++ b/packages/server/src/server/push/token-store.test.ts
+@@ -82,11 +82,11 @@ describe("PushTokenStore persistence", () => {
+       },
+     );
+ 
+-    store.renewToken("ExponentPushToken[test]");
++    store.renewToken("expo", "ExponentPushToken[test]");
+     rejectWrites = true;
+ 
+-    expect(() => store.revokeToken("ExponentPushToken[test]")).toThrow("disk full");
+-    expect(store.getActiveTokens()).toEqual(["ExponentPushToken[test]"]);
++    expect(() => store.revokeToken("expo", "ExponentPushToken[test]")).toThrow("disk full");
++    expect(store.getActiveTokensByProvider().get("expo")).toEqual(["ExponentPushToken[test]"]);
+     expect(JSON.parse(persisted)).toEqual({
+       subscriptions: [
+         {
+@@ -97,8 +97,88 @@ describe("PushTokenStore persistence", () => {
+     });
+ 
+     rejectWrites = false;
+-    store.revokeToken("ExponentPushToken[test]");
+-    expect(store.getActiveTokens()).toEqual([]);
++    store.revokeToken("expo", "ExponentPushToken[test]");
++    expect(store.getActiveTokensByProvider().size).toBe(0);
+     expect(JSON.parse(persisted)).toEqual({ subscriptions: [] });
+   });
+ });
++
++describe("PushTokenStore providers", () => {
++  function makeStore(onPersist: (payload: string) => void, filePath?: string) {
++    return new PushTokenStore(
++      createLogger(),
++      filePath ?? path.join(tmpdir(), `push-provider-store-${process.pid}`, "push-tokens.json"),
++      () => Date.parse("2026-08-10T00:00:00.000Z"),
++      48 * 60 * 60 * 1000,
++      (_filePath, payload) => onPersist(String(payload)),
++    );
++  }
++
++  test("keeps providers in separate buckets", () => {
++    let persisted = "";
++    const store = makeStore((payload) => {
++      persisted = payload;
++    });
++
++    store.renewToken("expo", "ExponentPushToken[a]");
++    store.renewToken("huawei", "hms-token-b");
++
++    const active = store.getActiveTokensByProvider();
++    expect(active.get("expo")).toEqual(["ExponentPushToken[a]"]);
++    expect(active.get("huawei")).toEqual(["hms-token-b"]);
++
++    // The layout is the compatibility contract: an older daemon reads only
++    // `subscriptions`, so it must contain Expo tokens and nothing else.
++    const parsed = JSON.parse(persisted) as {
++      subscriptions: { token: string }[];
++      providers: Record<string, { token: string }[]>;
++    };
++    expect(parsed.subscriptions.map((entry) => entry.token)).toEqual(["ExponentPushToken[a]"]);
++    expect(parsed.providers.huawei.map((entry) => entry.token)).toEqual(["hms-token-b"]);
++    expect(parsed.providers.expo).toBeUndefined();
++  });
++
++  test("revoking one provider leaves the other intact", () => {
++    const store = makeStore(() => undefined);
++    store.renewToken("expo", "ExponentPushToken[a]");
++    store.renewToken("huawei", "hms-token-b");
++
++    store.revokeToken("huawei", "hms-token-b");
++
++    const active = store.getActiveTokensByProvider();
++    expect(active.get("expo")).toEqual(["ExponentPushToken[a]"]);
++    expect(active.has("huawei")).toBe(false);
++  });
++
++  test("reads a pre-provider file as Expo and round-trips a provider file", () => {
++    const home = mkdtempSync(path.join(tmpdir(), "paseo-push-providers-"));
++    const tokenPath = path.join(home, "push-tokens.json");
++    try {
++      // Written by a daemon that predates provider ids.
++      writeFileSync(
++        tokenPath,
++        JSON.stringify({
++          subscriptions: [
++            { token: "ExponentPushToken[legacy]", expiresAt: "2026-08-12T00:00:00.000Z" },
++          ],
++        }),
++      );
++
++      let persisted = "";
++      const store = makeStore((payload) => {
++        persisted = payload;
++      }, tokenPath);
++      expect(store.getActiveTokensByProvider().get("expo")).toEqual(["ExponentPushToken[legacy]"]);
++
++      store.renewToken("huawei", "hms-token-c");
++      writeFileSync(tokenPath, persisted);
++
++      const reloaded = makeStore(() => undefined, tokenPath);
++      const active = reloaded.getActiveTokensByProvider();
++      expect(active.get("expo")).toEqual(["ExponentPushToken[legacy]"]);
++      expect(active.get("huawei")).toEqual(["hms-token-c"]);
++    } finally {
++      rmSync(home, { recursive: true, force: true });
++    }
++  });
++});
+diff --git a/packages/server/src/server/push/token-store.ts b/packages/server/src/server/push/token-store.ts
+index 540f05313..a4f23913c 100644
+--- a/packages/server/src/server/push/token-store.ts
++++ b/packages/server/src/server/push/token-store.ts
+@@ -2,15 +2,29 @@ import type pino from "pino";
+ import { existsSync, readFileSync } from "node:fs";
+ 
+ import { ensurePrivateFile, writePrivateFileAtomicSync } from "../private-files.js";
++import { EXPO_PROVIDER_ID } from "./providers/expo/provider.js";
+ 
+ /**
+- * Store for Expo push tokens.
++ * Store for push tokens, keyed by provider.
+  *
+- * Tokens are persisted to disk so pushes still work after daemon restarts.
++ * Tokens are persisted so pushes still work after daemon restarts.
++ *
++ * On-disk layout keeps Expo tokens exactly where they were and puts every other
++ * provider under a separate `providers` key:
++ *
++ *   { "subscriptions": [ … expo … ], "providers": { "huawei": [ … ] } }
++ *
++ * That separation is deliberate. An older daemon reading the same PASEO_HOME —
++ * a rollback, a downgrade, a second install — understands `subscriptions` and
++ * ignores `providers` entirely, so it can never POST a non-Expo token to Expo
++ * and never revoke one off the back of an Expo ticket error. A single flat list
++ * with a `provider` field would not survive that: the field is dropped on read
++ * and erased on the next write.
+  */
+ export class PushTokenStore {
+   private readonly logger: pino.Logger;
+-  private subscriptions = new Map<string, number>();
++  /** provider id -> token -> expiry (epoch ms). */
++  private subscriptions = new Map<string, Map<string, number>>();
+   private readonly filePath: string;
+   private readonly now: () => number;
+   private readonly leaseMs: number;
+@@ -31,48 +45,79 @@ export class PushTokenStore {
+     this.loadFromDisk();
+   }
+ 
+-  renewToken(token: string): void {
++  renewToken(provider: string, token: string): void {
+     const normalized = token.trim();
+-    if (!normalized) return;
++    if (!normalized || !provider) return;
+     const now = this.now();
+-    const currentExpiry = this.subscriptions.get(normalized);
++    const currentExpiry = this.subscriptions.get(provider)?.get(normalized);
+     if (currentExpiry !== undefined && currentExpiry - now > this.leaseMs / 2) return;
+-    const next = new Map(this.subscriptions);
+-    next.set(normalized, now + this.leaseMs);
++    const next = this.clone();
++    const forProvider = next.get(provider) ?? new Map<string, number>();
++    forProvider.set(normalized, now + this.leaseMs);
++    next.set(provider, forProvider);
+     this.persist(next);
+     this.subscriptions = next;
+-    this.logger.debug({ total: this.subscriptions.size }, "Renewed token");
++    this.logger.debug({ provider, total: this.total() }, "Renewed token");
+   }
+ 
+-  revokeToken(token: string): void {
++  revokeToken(provider: string, token: string): void {
+     const normalized = token.trim();
+     if (!normalized) return;
+-    if (!this.subscriptions.has(normalized)) return;
+-    const next = new Map(this.subscriptions);
+-    next.delete(normalized);
++    if (!this.subscriptions.get(provider)?.has(normalized)) return;
++    const next = this.clone();
++    const forProvider = next.get(provider);
++    forProvider?.delete(normalized);
++    if (forProvider && forProvider.size === 0) next.delete(provider);
+     this.persist(next);
+     this.subscriptions = next;
+-    this.logger.debug({ total: this.subscriptions.size }, "Revoked token");
++    this.logger.debug({ provider, total: this.total() }, "Revoked token");
+   }
+ 
+-  getActiveTokens(): string[] {
++  /** Live tokens grouped by provider, pruning anything expired. */
++  getActiveTokensByProvider(): Map<string, string[]> {
+     const now = this.now();
+-    const active = new Map(this.subscriptions);
+-    for (const [token, expiresAt] of this.subscriptions) {
+-      if (expiresAt <= now) {
+-        active.delete(token);
++    const active = new Map<string, Map<string, number>>();
++    let pruned = false;
++
++    for (const [provider, tokens] of this.subscriptions) {
++      const live = new Map<string, number>();
++      for (const [token, expiresAt] of tokens) {
++        if (expiresAt > now) live.set(token, expiresAt);
++        else pruned = true;
+       }
++      if (live.size > 0) active.set(provider, live);
++      else if (tokens.size > 0) pruned = true;
+     }
+-    if (active.size !== this.subscriptions.size) {
++
++    if (pruned) {
+       try {
+         this.persist(active);
+         this.subscriptions = active;
+       } catch {
+-        // Keep the previous state so a later send retries pruning. Expired tokens
+-        // are still excluded from this delivery.
++        // Keep the previous state so a later send retries pruning. Expired
++        // tokens are still excluded from this delivery.
+       }
+     }
+-    return Array.from(active.keys());
++
++    const result = new Map<string, string[]>();
++    for (const [provider, tokens] of active) {
++      result.set(provider, Array.from(tokens.keys()));
++    }
++    return result;
++  }
++
++  private total(): number {
++    let count = 0;
++    for (const tokens of this.subscriptions.values()) count += tokens.size;
++    return count;
++  }
++
++  private clone(): Map<string, Map<string, number>> {
++    const next = new Map<string, Map<string, number>>();
++    for (const [provider, tokens] of this.subscriptions) {
++      next.set(provider, new Map(tokens));
++    }
++    return next;
+   }
+ 
+   private loadFromDisk(): void {
+@@ -82,18 +127,26 @@ export class PushTokenStore {
+       }
+       ensurePrivateFile(this.filePath);
+       const raw = readFileSync(this.filePath, "utf-8");
+-      const parsed = JSON.parse(raw) as { subscriptions?: unknown; tokens?: unknown };
+-      const loaded = new Map<string, number>();
+-      const subscriptions = Array.isArray(parsed.subscriptions) ? parsed.subscriptions : [];
+-      for (const value of subscriptions) {
+-        if (!value || typeof value !== "object") continue;
+-        const candidate = value as { token?: unknown; expiresAt?: unknown };
+-        if (typeof candidate.token !== "string" || typeof candidate.expiresAt !== "string")
+-          continue;
+-        const token = candidate.token.trim();
+-        const expiresAt = Date.parse(candidate.expiresAt);
+-        if (token && Number.isFinite(expiresAt)) {
+-          loaded.set(token, expiresAt);
++      const parsed = JSON.parse(raw) as {
++        subscriptions?: unknown;
++        tokens?: unknown;
++        providers?: unknown;
++      };
++      const loaded = new Map<string, Map<string, number>>();
++
++      // COMPAT(pushProviders): `subscriptions` predates provider ids and can
++      // only ever have held Expo tokens. Remove after 2027-02-01, once no
++      // deployment can still be writing that shape.
++      const expo = readSubscriptionList(parsed.subscriptions);
++      if (expo.size > 0) loaded.set(EXPO_PROVIDER_ID, expo);
++
++      if (parsed.providers && typeof parsed.providers === "object") {
++        for (const [provider, value] of Object.entries(
++          parsed.providers as Record<string, unknown>,
++        )) {
++          if (provider === EXPO_PROVIDER_ID) continue;
++          const tokens = readSubscriptionList(value);
++          if (tokens.size > 0) loaded.set(provider, tokens);
+         }
+       }
+       this.subscriptions = loaded;
+@@ -102,31 +155,37 @@ export class PushTokenStore {
+         ? parsed.tokens.filter((token): token is string => typeof token === "string")
+         : [];
+       if (legacyTokens.length > 0) {
+-        const migrated = new Map(loaded);
++        const migrated = this.clone();
++        const forExpo = migrated.get(EXPO_PROVIDER_ID) ?? new Map<string, number>();
+         const expiresAt = this.now() + this.leaseMs;
+         for (const token of legacyTokens) {
+           const normalized = token.trim();
+-          if (normalized) migrated.set(normalized, expiresAt);
++          if (normalized) forExpo.set(normalized, expiresAt);
+         }
++        migrated.set(EXPO_PROVIDER_ID, forExpo);
+         this.persist(migrated);
+         this.subscriptions = migrated;
+       }
+-      this.logger.info({ total: this.subscriptions.size }, "Loaded push tokens");
++      this.logger.info({ total: this.total() }, "Loaded push tokens");
+     } catch (error) {
+       const err = error instanceof Error ? error : new Error(String(error));
+       this.logger.warn({ err }, "Failed to load push tokens");
+     }
+   }
+ 
+-  private persist(subscriptions: ReadonlyMap<string, number>): void {
++  private persist(subscriptions: ReadonlyMap<string, ReadonlyMap<string, number>>): void {
+     try {
++      const providers: Record<string, { token: string; expiresAt: string }[]> = {};
++      for (const [provider, tokens] of subscriptions) {
++        if (provider === EXPO_PROVIDER_ID) continue;
++        providers[provider] = serialiseList(tokens);
++      }
++
+       const payload =
+         JSON.stringify(
+           {
+-            subscriptions: Array.from(subscriptions, ([token, expiresAt]) => ({
+-              token,
+-              expiresAt: new Date(expiresAt).toISOString(),
+-            })),
++            subscriptions: serialiseList(subscriptions.get(EXPO_PROVIDER_ID) ?? new Map()),
++            ...(Object.keys(providers).length > 0 ? { providers } : {}),
+           },
+           null,
+           2,
+@@ -139,3 +198,26 @@ export class PushTokenStore {
+     }
+   }
+ }
++
++function readSubscriptionList(value: unknown): Map<string, number> {
++  const loaded = new Map<string, number>();
++  if (!Array.isArray(value)) return loaded;
++  for (const entry of value) {
++    if (!entry || typeof entry !== "object") continue;
++    const candidate = entry as { token?: unknown; expiresAt?: unknown };
++    if (typeof candidate.token !== "string" || typeof candidate.expiresAt !== "string") continue;
++    const token = candidate.token.trim();
++    const expiresAt = Date.parse(candidate.expiresAt);
++    if (token && Number.isFinite(expiresAt)) loaded.set(token, expiresAt);
++  }
++  return loaded;
++}
++
++function serialiseList(
++  tokens: ReadonlyMap<string, number>,
++): { token: string; expiresAt: string }[] {
++  return Array.from(tokens, ([token, expiresAt]) => ({
++    token,
++    expiresAt: new Date(expiresAt).toISOString(),
++  }));
++}
+diff --git a/packages/server/src/server/session.ts b/packages/server/src/server/session.ts
+index 9a2b2c082..cf6ca8a6a 100644
+--- a/packages/server/src/server/session.ts
++++ b/packages/server/src/server/session.ts
+@@ -191,7 +191,7 @@ import type { HubRelationshipManagement } from "./hub/relationship-controller.js
+ import { HubExecutionController } from "./hub/execution-controller.js";
+ import type { HubExecutionAgents } from "./hub/daemon-executions.js";
+ import { DownloadTokenStore } from "./file-download/token-store.js";
+-import type { PushNotifications } from "./push/index.js";
++import { DEFAULT_PUSH_PROVIDER, type PushNotifications } from "./push/index.js";
+ import {
+   archivePersistedWorkspaceRecord,
+   archiveWorkspaceContents,
+@@ -775,7 +775,7 @@ export class Session {
+       capabilities: ReadonlySet<ClientCapability>;
+       appVersion: string | null;
+       activity: ClientActivity | null;
+-      pushToken: string | null;
++      pushToken: { provider: string; token: string } | null;
+     }
+   >();
+   private unsubscribeTerminalWorkspaceContributionEvents: (() => void) | null = null;
+@@ -3195,12 +3195,18 @@ export class Session {
+         await this.handleListCommandsRequest(msg);
+         return;
+       case "register_push_token":
+-        this.handleRegisterPushToken(msg.token);
++        this.handleRegisterPushToken(msg.token, msg.provider);
+         return;
+       case "push.unregister.request":
+-        this.pushNotifications.revoke(msg.token);
+-        if (this.currentClientMetadata().pushToken?.trim() === msg.token.trim()) {
+-          this.currentClientMetadata().pushToken = null;
++        {
++          // COMPAT(pushProviders): a client from before the field only ever had
++          // Expo tokens, so an absent provider means Expo.
++          const provider = msg.provider ?? DEFAULT_PUSH_PROVIDER;
++          this.pushNotifications.revoke(msg.token, provider);
++          const registered = this.currentClientMetadata().pushToken;
++          if (registered?.token.trim() === msg.token.trim() && registered.provider === provider) {
++            this.currentClientMetadata().pushToken = null;
++          }
+         }
+         this.emit({
+           type: "push.unregister.response",
+@@ -5001,7 +5007,7 @@ export class Session {
+       void this.clearFocusedTerminalAttention(focusedTerminalId);
+     }
+     if (metadata.pushToken) {
+-      this.pushNotifications.renew(metadata.pushToken);
++      this.pushNotifications.renew(metadata.pushToken.token, metadata.pushToken.provider);
+     }
+   }
+ 
+@@ -5020,10 +5026,12 @@ export class Session {
+   /**
+    * Handle push token registration
+    */
+-  private handleRegisterPushToken(token: string): void {
+-    this.currentClientMetadata().pushToken = token;
+-    this.pushNotifications.renew(token);
+-    this.sessionLogger.info("Registered push token");
++  private handleRegisterPushToken(token: string, provider?: string): void {
++    // COMPAT(pushProviders): absent provider means Expo — see the schema.
++    const resolved = provider ?? DEFAULT_PUSH_PROVIDER;
++    this.currentClientMetadata().pushToken = { provider: resolved, token };
++    this.pushNotifications.renew(token, resolved);
++    this.sessionLogger.info({ provider: resolved }, "Registered push token");
+   }
+ 
+   /**
+diff --git a/packages/server/src/server/websocket-server.relay-reconnect.test.ts b/packages/server/src/server/websocket-server.relay-reconnect.test.ts
+index 2d48a93c8..5802b7a79 100644
+--- a/packages/server/src/server/websocket-server.relay-reconnect.test.ts
++++ b/packages/server/src/server/websocket-server.relay-reconnect.test.ts
+@@ -121,14 +121,16 @@ vi.mock("./session.js", () => ({
+ }));
+ 
+ vi.mock("./push/index.js", () => ({
+-  createPushNotifications: () => ({
++  createPushNotifications: (): PushNotifications => ({
+     renew: () => undefined,
+     revoke: () => undefined,
+     send: async () => undefined,
++    listDeliverableProviders: () => [],
+   }),
+ }));
+ 
+ import { z } from "zod";
++import type { PushNotifications } from "./push/index.js";
+ import { VoiceAssistantWebSocketServer } from "./websocket-server";
+ import { DAEMON_PERMISSIONS, parseServerInfoStatusPayload } from "./messages.js";
+ import type { SpeechReadinessSnapshot } from "./speech/speech-runtime.js";
+diff --git a/packages/server/src/server/websocket-server.ts b/packages/server/src/server/websocket-server.ts
+index 88fb2c327..be29fc0bf 100644
+--- a/packages/server/src/server/websocket-server.ts
++++ b/packages/server/src/server/websocket-server.ts
+@@ -1995,6 +1995,10 @@ export class VoiceAssistantWebSocketServer {
+         ...(this.advertiseRelayConfig ? { relayConfig: true } : {}),
+         // COMPAT(pushTokenRevocation): added in v0.3.2, remove gate after 2027-02-10.
+         pushTokenRevocation: true,
++        // Channels this host can actually deliver through. A client registers a
++        // token only for a provider named here, so it never hands over a token
++        // nobody can route.
++        pushProviders: this.pushNotifications.listDeliverableProviders(),
+         // COMPAT(plugins): added in v0.3.0, remove gate after 2027-08-07.
+         plugins: true,
+         pluginManagement: true,
+-- 
+2.50.1 (Apple Git-155)
+
