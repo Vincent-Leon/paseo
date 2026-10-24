@@ -1,0 +1,456 @@
+From 2681695a04c681310b22c7884797fdfeda0d554e Mon Sep 17 00:00:00 2001
+From: Vincent Leon <leon@mbp.com>
+Date: Sat, 24 Oct 2026 23:47:05 +0800
+Subject: [PATCH] feat(push): let a provider push while someone is present
+
+The daemon pushes only when nobody has used Paseo for three minutes;
+otherwise the most recently active client gets the alert in-app and no
+push goes out. Someone working at a desktop never hears about an alert
+on their phone.
+
+A push provider can now declare deliversWhilePresent. When a present
+client gets an alert in-app, and nobody is looking at its agent or
+terminal, the daemon also pushes through those providers, leaving out
+that client's own registration so the device showing the alert does
+not get it twice. Without such a provider nothing changes: senders
+that lack sendWhilePresent, as the tests' recording sender does, keep
+the old rule exactly.
+
+The Huawei provider declares it by default. "pushWhilePresent": false
+in huawei-push/options.json restores the push-only-when-away rule.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ packages/server/src/server/push/index.test.ts |  52 +++++++-
+ packages/server/src/server/push/index.ts      | 122 ++++++++++++------
+ .../push/providers/huawei/provider.test.ts    |  15 +++
+ .../server/push/providers/huawei/provider.ts  |   5 +
+ .../server/src/server/push/push-provider.ts   |   6 +
+ packages/server/src/server/session.ts         |   5 +
+ .../server/src/server/websocket-server.ts     |  63 ++++++---
+ 7 files changed, 208 insertions(+), 60 deletions(-)
+
+diff --git a/packages/server/src/server/push/index.test.ts b/packages/server/src/server/push/index.test.ts
+index 1cd4c1baa..f837f51ef 100644
+--- a/packages/server/src/server/push/index.test.ts
++++ b/packages/server/src/server/push/index.test.ts
+@@ -4,7 +4,7 @@ import path from "node:path";
+ import type pino from "pino";
+ import { afterEach, describe, expect, test } from "vitest";
+ 
+-import { createPushNotifications } from "./index.js";
++import { createPushNotifications, type PushProvider, type PushSubscription } from "./index.js";
+ 
+ function createLogger(): pino.Logger {
+   const logger = {
+@@ -64,4 +64,54 @@ describe("push notifications", () => {
+ 
+     expect(deliveries).toEqual([]);
+   });
++
++  test("while someone is present, only providers that ask for it push, and not to that device", async () => {
++    const home = mkdtempSync(path.join(tmpdir(), "paseo-push-notifications-"));
++    homes.push(home);
++    const delivered: Record<string, string[][]> = { huawei: [], expo: [] };
++    const provider = (providerId: string, deliversWhilePresent: boolean): PushProvider => ({
++      providerId,
++      deliversWhilePresent,
++      deliver: async (subscriptions: readonly PushSubscription[]) => {
++        delivered[providerId].push(subscriptions.map((subscription) => subscription.token));
++        return {};
++      },
++    });
++    const pushNotifications = createPushNotifications({
++      logger: createLogger(),
++      filePath: path.join(home, "push-tokens.json"),
++      now: () => Date.parse("2026-08-10T00:00:00.000Z"),
++      providers: [provider("huawei", true), provider("expo", false)],
++    });
++    pushNotifications.renew("phone", "huawei");
++    pushNotifications.renew("laptop", "huawei");
++    pushNotifications.renew("ExponentPushToken[tablet]", "expo");
++    const payload = { title: "Agent finished", body: "Done" };
++
++    await pushNotifications.sendWhilePresent(payload, { provider: "huawei", token: " laptop " });
++    expect(delivered).toEqual({ huawei: [["phone"]], expo: [] });
++
++    await pushNotifications.send(payload);
++    expect(delivered).toEqual({
++      huawei: [["phone"], ["phone", "laptop"]],
++      expo: [["ExponentPushToken[tablet]"]],
++    });
++  });
++
++  test("while someone is present, a host without such a provider pushes nothing", async () => {
++    const home = mkdtempSync(path.join(tmpdir(), "paseo-push-notifications-"));
++    homes.push(home);
++    const deliveries: string[][] = [];
++    const pushNotifications = createPushNotifications({
++      logger: createLogger(),
++      filePath: path.join(home, "push-tokens.json"),
++      now: () => Date.parse("2026-08-10T00:00:00.000Z"),
++      deliver: async (tokens) => deliveries.push(tokens),
++    });
++
++    pushNotifications.renew("ExponentPushToken[present-device]");
++    await pushNotifications.sendWhilePresent({ title: "Agent finished", body: "Done" }, null);
++
++    expect(deliveries).toEqual([]);
++  });
+ });
+diff --git a/packages/server/src/server/push/index.ts b/packages/server/src/server/push/index.ts
+index 767d7f940..d6c6ed55a 100644
+--- a/packages/server/src/server/push/index.ts
++++ b/packages/server/src/server/push/index.ts
+@@ -22,11 +22,24 @@ export interface PushNotifications {
+   renew(token: string, provider?: string, metadata?: Record<string, string>): void;
+   revoke(token: string, provider?: string): void;
+   send(payload: PushPayload): Promise<void>;
++  /**
++   * Pushes an alert that a present client already gets in-app, through the providers that
++   * deliver while someone is present. `skip` is that client's own registration, so the device
++   * showing the alert does not get it twice.
++   */
++  sendWhilePresent(payload: PushPayload, skip: PushRegistration | null): Promise<void>;
+   /** Provider ids this daemon can actually deliver through, for capability gating. */
+   listDeliverableProviders(): string[];
+ }
+ 
+-export type PushNotificationSender = Pick<PushNotifications, "send">;
++export interface PushRegistration {
++  provider: string;
++  token: string;
++}
++
++// A sender without sendWhilePresent pushes only when nobody is present.
++export type PushNotificationSender = Pick<PushNotifications, "send"> &
++  Partial<Pick<PushNotifications, "sendWhilePresent">>;
+ 
+ export function createPushNotifications(options: {
+   logger: pino.Logger;
+@@ -39,18 +52,64 @@ export function createPushNotifications(options: {
+    * bypasses provider-reported revocations.
+    */
+   deliver?: (tokens: string[], payload: PushPayload) => Promise<void>;
++  /** Replaces the manifest's providers, for tests. */
++  providers?: readonly PushProvider[];
+ }): PushNotifications {
+   const now = options.now ?? Date.now;
+   const store = new PushTokenStore(options.logger, options.filePath, now, PUSH_TOKEN_LEASE_MS);
+ 
+   const providers = new Map<string, PushProvider>();
+-  for (const entry of PUSH_PROVIDERS) {
+-    const provider = entry.create({
+-      logger: options.logger,
+-      config: options.providerConfig?.[entry.providerId],
+-    });
+-    // A null provider means this host holds no credentials for that channel.
+-    if (provider) providers.set(entry.providerId, provider);
++  if (options.providers) {
++    for (const provider of options.providers) providers.set(provider.providerId, provider);
++  } else {
++    for (const entry of PUSH_PROVIDERS) {
++      const provider = entry.create({
++        logger: options.logger,
++        config: options.providerConfig?.[entry.providerId],
++      });
++      // A null provider means this host holds no credentials for that channel.
++      if (provider) providers.set(entry.providerId, provider);
++    }
++  }
++
++  async function deliver(
++    byProvider: Map<string, PushSubscription[]>,
++    payload: PushPayload,
++    whilePresent: boolean,
++  ): Promise<void> {
++    const tokenCount = Array.from(byProvider.values()).reduce(
++      (total, subscriptions) => total + subscriptions.length,
++      0,
++    );
++    options.logger.info({ tokenCount, whilePresent }, "Sending push notification");
++    if (tokenCount === 0) return;
++
++    if (options.deliver) {
++      const tokens = Array.from(byProvider.values())
++        .flat()
++        .map((subscription: PushSubscription) => subscription.token);
++      await options.deliver(tokens, payload);
++      return;
++    }
++
++    // One failing channel must not stop the others, so each is awaited
++    // independently and its revocations applied on its own.
++    await Promise.all(
++      Array.from(byProvider, async ([providerId, subscriptions]) => {
++        const provider = providers.get(providerId);
++        if (!provider) {
++          options.logger.warn(
++            { provider: providerId, tokenCount: subscriptions.length },
++            "No provider registered for stored tokens",
++          );
++          return;
++        }
++        const result = await provider.deliver(subscriptions, payload);
++        for (const token of result.revokedTokens ?? []) {
++          store.revokeToken(providerId, token);
++        }
++      }),
++    );
+   }
+ 
+   return {
+@@ -64,40 +123,21 @@ export function createPushNotifications(options: {
+       return Array.from(providers.keys());
+     },
+     async send(payload) {
+-      const byProvider = store.getActiveSubscriptionsByProvider();
+-      const tokenCount = Array.from(byProvider.values()).reduce(
+-        (total, subscriptions) => total + subscriptions.length,
+-        0,
+-      );
+-      options.logger.info({ tokenCount }, "Sending push notification");
+-      if (tokenCount === 0) return;
+-
+-      if (options.deliver) {
+-        const tokens = Array.from(byProvider.values())
+-          .flat()
+-          .map((subscription: PushSubscription) => subscription.token);
+-        await options.deliver(tokens, payload);
+-        return;
++      await deliver(store.getActiveSubscriptionsByProvider(), payload, false);
++    },
++    async sendWhilePresent(payload, skip) {
++      const skipToken = skip?.token.trim();
++      const byProvider = new Map<string, PushSubscription[]>();
++      for (const [providerId, subscriptions] of store.getActiveSubscriptionsByProvider()) {
++        if (!providers.get(providerId)?.deliversWhilePresent) continue;
++        const kept = subscriptions.filter(
++          (subscription) => !(providerId === skip?.provider && subscription.token === skipToken),
++        );
++        if (kept.length > 0) byProvider.set(providerId, kept);
+       }
+-
+-      // One failing channel must not stop the others, so each is awaited
+-      // independently and its revocations applied on its own.
+-      await Promise.all(
+-        Array.from(byProvider, async ([providerId, subscriptions]) => {
+-          const provider = providers.get(providerId);
+-          if (!provider) {
+-            options.logger.warn(
+-              { provider: providerId, tokenCount: subscriptions.length },
+-              "No provider registered for stored tokens",
+-            );
+-            return;
+-          }
+-          const result = await provider.deliver(subscriptions, payload);
+-          for (const token of result.revokedTokens ?? []) {
+-            store.revokeToken(providerId, token);
+-          }
+-        }),
+-      );
++      // Most hosts have no such provider; stay as quiet as a daemon that never pushes here.
++      if (byProvider.size === 0) return;
++      await deliver(byProvider, payload, true);
+     },
+   };
+ }
+diff --git a/packages/server/src/server/push/providers/huawei/provider.test.ts b/packages/server/src/server/push/providers/huawei/provider.test.ts
+index 977a2a03d..d683d0a33 100644
+--- a/packages/server/src/server/push/providers/huawei/provider.test.ts
++++ b/packages/server/src/server/push/providers/huawei/provider.test.ts
+@@ -149,6 +149,21 @@ describe("HuaweiPushProvider", () => {
+     });
+   });
+ 
++  test("pushes while someone is present unless options.json turns it off", () => {
++    const build = (files: Record<string, string>) =>
++      HuaweiPushProvider.fromFactoryOptions({
++        logger: createLogger(),
++        config: {
++          directory: directoryWith({ "service-account.json": JSON.stringify(account), ...files }),
++        },
++      });
++
++    expect(build({})?.deliversWhilePresent).toBe(true);
++    expect(
++      build({ "options.json": JSON.stringify({ pushWhilePresent: false }) })?.deliversWhilePresent,
++    ).toBe(false);
++  });
++
+   test("takes its category and test mode from options.json", async () => {
+     const { sent, fetchImpl } = fakeFetch([{ body: { code: "80000000" } }]);
+     const provider = HuaweiPushProvider.fromFactoryOptions({
+diff --git a/packages/server/src/server/push/providers/huawei/provider.ts b/packages/server/src/server/push/providers/huawei/provider.ts
+index 1cd8f0c7c..18e344146 100644
+--- a/packages/server/src/server/push/providers/huawei/provider.ts
++++ b/packages/server/src/server/push/providers/huawei/provider.ts
+@@ -56,6 +56,9 @@ const OptionsSchema = z.object({
+   // is what makes a personal build usable before the entitlement is granted.
+   // Set false once it is.
+   testMessage: z.boolean().default(true),
++  // Push while Paseo is in use on another device too, so the phone hears about every alert.
++  // Absent means true; false keeps the daemon's rule of pushing only when nobody is present.
++  pushWhilePresent: z.boolean().optional(),
+   baseUrl: z.string().url().optional(),
+ });
+ 
+@@ -113,6 +116,7 @@ export function illegalTokensFrom(msg: unknown): string[] {
+ 
+ export class HuaweiPushProvider implements PushProvider {
+   readonly providerId = HUAWEI_PROVIDER_ID;
++  readonly deliversWhilePresent: boolean;
+ 
+   private readonly logger: pino.Logger;
+   private readonly fetchImpl: typeof fetch;
+@@ -133,6 +137,7 @@ export class HuaweiPushProvider implements PushProvider {
+     this.account = input.account;
+     this.key = createPrivateKey(input.account.private_key);
+     this.options = input.options;
++    this.deliversWhilePresent = input.options.pushWhilePresent ?? true;
+     this.fetchImpl = input.fetch ?? fetch;
+     this.now = input.now ?? Date.now;
+   }
+diff --git a/packages/server/src/server/push/push-provider.ts b/packages/server/src/server/push/push-provider.ts
+index 59dc71654..2a5cca77d 100644
+--- a/packages/server/src/server/push/push-provider.ts
++++ b/packages/server/src/server/push/push-provider.ts
+@@ -36,6 +36,12 @@ export interface PushProvider {
+   /** Wire value, config key and manifest key. One name, no synonyms. */
+   readonly providerId: string;
+ 
++  /**
++   * Also hears about alerts while someone is using Paseo on another device, which shows them
++   * in-app. Without it a provider only hears about alerts nobody is present for.
++   */
++  readonly deliversWhilePresent?: boolean;
++
+   /**
+    * Delivers to every subscription.
+    *
+diff --git a/packages/server/src/server/session.ts b/packages/server/src/server/session.ts
+index 7252345b2..89672763c 100644
+--- a/packages/server/src/server/session.ts
++++ b/packages/server/src/server/session.ts
+@@ -1565,6 +1565,11 @@ export class Session {
+     return source ? (this.clientSources.get(source)?.activity ?? null) : null;
+   }
+ 
++  /** The push registration this client made, if it made one. */
++  public getClientPushToken(source: object): { provider: string; token: string } | null {
++    return this.clientSources.get(source)?.pushToken ?? null;
++  }
++
+   private getFocusedAgentSelectionForCwd(cwd: string):
+     | {
+         provider?: string | null;
+diff --git a/packages/server/src/server/websocket-server.ts b/packages/server/src/server/websocket-server.ts
+index f107eebb8..97e2c9283 100644
+--- a/packages/server/src/server/websocket-server.ts
++++ b/packages/server/src/server/websocket-server.ts
+@@ -75,6 +75,7 @@ import {
+   createPushNotifications,
+   type PushNotifications,
+   type PushNotificationSender,
++  type PushPayload,
+ } from "./push/index.js";
+ import { HUAWEI_PROVIDER_ID } from "./push/providers/huawei/provider.js";
+ import type { ScriptHealthState } from "./script-health-monitor.js";
+@@ -2786,6 +2787,23 @@ export class VoiceAssistantWebSocketServer {
+     };
+   }
+ 
++  /**
++   * Pushes an alert that `recipient` gets in-app through the providers that deliver while someone
++   * is present, leaving out the recipient's own registration.
++   */
++  private pushWhilePresent(
++    payload: PushPayload,
++    recipient: WebSocketLike | undefined,
++    logContext: { agentId: string } | { terminalId: string },
++  ): void {
++    const skip = recipient
++      ? (this.sessions.get(recipient)?.session.getClientPushToken(recipient) ?? null)
++      : null;
++    void this.pushNotificationSender.sendWhilePresent?.(payload, skip)?.catch((err) => {
++      this.logger.warn({ err, ...logContext }, "Failed to send push notification");
++    });
++  }
++
+   private async broadcastAgentAttention(params: {
+     agentId: string;
+     provider: AgentProvider;
+@@ -2828,10 +2846,11 @@ export class VoiceAssistantWebSocketServer {
+       permissionRequest: findLatestPermissionRequest(agent.pendingPermissions),
+     });
+ 
++    const pushEligible = isPushEligibleAttentionReason(params.reason);
+     const plan = computeNotificationPlan({
+       allStates,
+       focusTarget: { kind: "agent", id: params.agentId },
+-      pushEligible: isPushEligibleAttentionReason(params.reason),
++      pushEligible,
+       nowMs,
+     });
+ 
+@@ -2839,6 +2858,11 @@ export class VoiceAssistantWebSocketServer {
+       void this.pushNotificationSender.send(notification).catch((err) => {
+         this.logger.warn({ err, agentId: params.agentId }, "Failed to send push notification");
+       });
++    } else if (pushEligible && plan.inAppRecipientIndex !== null) {
++      // Someone present gets this in-app; providers that deliver while present push it as well.
++      this.pushWhilePresent(notification, notificationEntries[plan.inAppRecipientIndex]?.ws, {
++        agentId: params.agentId,
++      });
+     }
+ 
+     for (const { ws } of clientEntries) {
+@@ -2932,25 +2956,28 @@ export class VoiceAssistantWebSocketServer {
+ 
+     const title = terminalAttentionTitle(params.reason);
+     const body = params.terminalName;
++    const pushPayload = {
++      title,
++      body,
++      data: {
++        serverId: this.serverId,
++        terminalId: params.terminalId,
++        cwd: params.cwd,
++        ...(workspaceId ? { workspaceId } : {}),
++      },
++    };
+ 
+     if (plan.shouldPush) {
+-      void this.pushNotificationSender
+-        .send({
+-          title,
+-          body,
+-          data: {
+-            serverId: this.serverId,
+-            terminalId: params.terminalId,
+-            cwd: params.cwd,
+-            ...(workspaceId ? { workspaceId } : {}),
+-          },
+-        })
+-        .catch((err) => {
+-          this.logger.warn(
+-            { err, terminalId: params.terminalId },
+-            "Failed to send push notification",
+-          );
+-        });
++      void this.pushNotificationSender.send(pushPayload).catch((err) => {
++        this.logger.warn(
++          { err, terminalId: params.terminalId },
++          "Failed to send push notification",
++        );
++      });
++    } else if (plan.inAppRecipientIndex !== null) {
++      this.pushWhilePresent(pushPayload, notificationEntries[plan.inAppRecipientIndex]?.ws, {
++        terminalId: params.terminalId,
++      });
+     }
+ 
+     for (const { ws } of clientEntries) {
+-- 
+2.50.1 (Apple Git-155)
+
