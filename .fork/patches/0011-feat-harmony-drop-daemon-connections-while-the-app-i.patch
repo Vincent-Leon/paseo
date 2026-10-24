@@ -1,0 +1,231 @@
+From c80fe91a743966769b7836c49b5c04af9da95e3f Mon Sep 17 00:00:00 2001
+From: Vincent Leon <leon@mbp.com>
+Date: Sat, 24 Oct 2026 21:54:08 +0800
+Subject: [PATCH 11/11] feat(harmony): drop daemon connections while the app is
+ in the background
+
+HarmonyOS freezes a backgrounded app within seconds and its sockets go
+silent without closing. A daemon that still sees the phone connected, and
+recently used, hands it an in-app alert nobody receives, and pushes nothing,
+until the relay lease runs out. The HarmonyOS build now suspends every
+client when the app leaves the foreground, so the daemon pushes from the
+first moment, and resumes them when it returns.
+
+DaemonClient gains suspend() and resume(): the connection drops through the
+same path a failed liveness check takes, subscriptions and state survive,
+and nothing reconnects until resume(), which reconnects at once.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../app/src/harmony/host-sync.harmony.tsx     | 55 ++++++++++---------
+ .../app/src/utils/os-notifications.harmony.ts |  6 +-
+ packages/client/src/daemon-client.test.ts     | 43 +++++++++++++++
+ packages/client/src/daemon-client.ts          | 32 ++++++++++-
+ 4 files changed, 105 insertions(+), 31 deletions(-)
+
+diff --git a/packages/app/src/harmony/host-sync.harmony.tsx b/packages/app/src/harmony/host-sync.harmony.tsx
+index cbea1e720..6014f93f2 100644
+--- a/packages/app/src/harmony/host-sync.harmony.tsx
++++ b/packages/app/src/harmony/host-sync.harmony.tsx
+@@ -30,42 +30,43 @@ function field(payload: unknown, key: string): unknown {
+ const visibility = typeof document === "undefined" ? null : installHostVisibility(document);
+ if (harmonyHost.hostInfo()?.foreground === false) visibility?.setHostState("background");
+ 
+-harmonyHost.on("lifecycle", (payload) => {
+-  const state = field(payload, "state");
+-  if (state !== "active" && state !== "background") return;
+-  visibility?.setHostState(state);
+-  if (state === "active") reportBackgroundDiagnostics();
+-});
+-
+ /**
+- * Pings every live connection and reconnects a dead one at once, skipping the backoff timer.
+- * A hidden page's own timers can be throttled to once a minute, slower than the relay's idle
+- * lease, so while the continuous task holds the app the shell drives this instead.
++ * HarmonyOS freezes a backgrounded app within seconds, and its sockets then go silent without
++ * closing. A daemon that still sees the phone connected, and recently used, hands it an in-app
++ * alert nobody receives instead of pushing. Dropping every connection on the way out makes the
++ * daemon push from the first moment; coming back reconnects at once.
+  */
+-function keepConnectionsAlive(): void {
+-  getHostRuntimeStore().ensureConnectedAll({ verify: true });
++function suspendConnections(): void {
++  const store = getHostRuntimeStore();
++  for (const host of store.getHosts()) store.getClient(host.serverId)?.suspend("App in background");
++}
++
++function resumeConnections(): void {
++  const store = getHostRuntimeStore();
++  for (const host of store.getHosts()) store.getClient(host.serverId)?.resume();
+ }
+ 
+-harmonyHost.on("tick", (payload) => {
+-  harmonyHost.send("tick.ack", { sentAt: field(payload, "sentAt") });
+-  keepConnectionsAlive();
++harmonyHost.on("lifecycle", (payload) => {
++  const state = field(payload, "state");
++  if (state === "background") {
++    // Hidden first, so the last heartbeat says so before the connection goes.
++    visibility?.setHostState("background");
++    suspendConnections();
++  } else if (state === "active") {
++    // Reconnected first, so the foreground's own reconnect check finds clients it may use.
++    resumeConnections();
++    visibility?.setHostState("active");
++  }
+ });
+ 
+-// A network switch kills sockets without a close event.
++// A network switch kills sockets without a close event; probe them instead of waiting out a
++// heartbeat timeout.
+ harmonyHost.on("network", (payload) => {
+-  if (field(payload, "available") === true) keepConnectionsAlive();
++  if (field(payload, "available") === true) {
++    getHostRuntimeStore().ensureConnectedAll({ verify: true });
++  }
+ });
+ 
+-/** Whether the page kept running in the background shows up in the device log on every return. */
+-function reportBackgroundDiagnostics(): void {
+-  void harmonyHost
+-    .request("diagnostics")
+-    .then((diagnostics) =>
+-      harmonyHost.send("log", { level: "info", message: `resumed ${JSON.stringify(diagnostics)}` }),
+-    )
+-    .catch(() => undefined);
+-}
+-
+ /**
+  * Hands a notification tap to the app's notification router as a browser notification click.
+  * A tap that cold-starts the app can arrive before the router has mounted; nobody cancelling the
+diff --git a/packages/app/src/utils/os-notifications.harmony.ts b/packages/app/src/utils/os-notifications.harmony.ts
+index 65690d168..3c94c76c2 100644
+--- a/packages/app/src/utils/os-notifications.harmony.ts
++++ b/packages/app/src/utils/os-notifications.harmony.ts
+@@ -14,9 +14,9 @@ export const ensureOsNotificationPermission: typeof Base.ensureOsNotificationPer
+   requestHarmonyNotificationPermission();
+ 
+ /**
+- * HarmonyOS has no push for Paseo, so every alert the page decides to show is a local
+- * notification from the shell. In the background that only happens while the continuous task
+- * keeps the page alive; without it the system freezes the page and nothing runs at all.
++ * Alerts the page decides to show while Paseo is open become local notifications from the shell.
++ * Once the app is in the background the page is frozen and its connections are dropped; the
++ * daemon pushes through Push Kit instead.
+  */
+ export const sendOsNotification: typeof Base.sendOsNotification = (payload) =>
+   presentHarmonyNotification(payload);
+diff --git a/packages/client/src/daemon-client.test.ts b/packages/client/src/daemon-client.test.ts
+index f663aeb8b..9f7e4764f 100644
+--- a/packages/client/src/daemon-client.test.ts
++++ b/packages/client/src/daemon-client.test.ts
+@@ -1347,6 +1347,49 @@ test("ensureConnected reconnects immediately without leaving the scheduled retry
+   }
+ });
+ 
++test("suspend keeps the connection down until resume, then reconnects at once", async () => {
++  useHeartbeatClock();
++  try {
++    const first = createMockTransport();
++    const second = createMockTransport();
++    const transports = [first, second];
++    let transportIndex = 0;
++    const client = new DaemonClient({
++      url: "ws://test",
++      clientId: "clsk_suspend",
++      reconnect: { enabled: true, baseDelayMs: 1_500, maxDelayMs: 1_500 },
++      transportFactory: () => {
++        const transport = transports[transportIndex];
++        if (!transport) throw new Error("unexpected extra reconnect");
++        transportIndex += 1;
++        return transport.transport;
++      },
++    });
++    clients.push(client);
++
++    const initialConnect = client.connect();
++    first.triggerOpen();
++    await initialConnect;
++    const close = vi.spyOn(first.transport, "close");
++
++    client.suspend("App in background");
++    expect(close).toHaveBeenCalledWith(1000, "App in background");
++    expect(client.getConnectionState().status).toBe("disconnected");
++
++    client.ensureConnected({ verify: true });
++    await vi.advanceTimersByTimeAsync(60_000);
++    expect(transportIndex).toBe(1);
++
++    client.resume();
++    expect(client.getConnectionState().status).toBe("connecting");
++    expect(transportIndex).toBe(2);
++    second.triggerOpen();
++    expect(client.getConnectionState().status).toBe("connected");
++  } finally {
++    vi.useRealTimers();
++  }
++});
++
+ test("connect during a scheduled retry reconnects immediately without leaving the retry armed", async () => {
+   useHeartbeatClock();
+   try {
+diff --git a/packages/client/src/daemon-client.ts b/packages/client/src/daemon-client.ts
+index e637936b4..56fb90523 100644
+--- a/packages/client/src/daemon-client.ts
++++ b/packages/client/src/daemon-client.ts
+@@ -1328,6 +1328,8 @@ export class DaemonClient {
+   private reconnectAttempt = 0;
+   private traceConnectionAttempt = 0;
+   private shouldReconnect = true;
++  // Set by suspend(): the connection stays down, whatever asks for it, until resume().
++  private suspended = false;
+   private connectPromise: Promise<void> | null = null;
+   private connectResolve: (() => void) | null = null;
+   private connectReject: ((error: Error) => void) | null = null;
+@@ -1675,7 +1677,7 @@ export class DaemonClient {
+   }
+ 
+   ensureConnected(options?: { verify?: boolean }): void {
+-    if (this.connectionState.status === "disposed") {
++    if (this.connectionState.status === "disposed" || this.suspended) {
+       return;
+     }
+     if (!this.shouldReconnect) {
+@@ -1695,6 +1697,34 @@ export class DaemonClient {
+     );
+   }
+ 
++  /**
++   * Drops the connection but keeps the client, its subscriptions and its state, and keeps it
++   * down until resume(). For an app the platform freezes in the background: the daemon sees the
++   * device leave at once and pushes, instead of handing an in-app alert to a socket nobody
++   * answers until its lease runs out.
++   */
++  suspend(reason = "Suspended"): void {
++    if (this.connectionState.status === "disposed" || this.suspended) {
++      return;
++    }
++    this.suspended = true;
++    this.setReconnectEnabled(false);
++    if (this.transport || this.connectionState.status === "connecting") {
++      this.disposeTransport(1000, reason);
++      this.scheduleReconnect({ reason, event: "SUSPENDED", reasonCode: "suspended" });
++    }
++  }
++
++  /** Ends suspend() and reconnects at once, skipping any reconnect backoff. */
++  resume(): void {
++    if (!this.suspended) {
++      return;
++    }
++    this.suspended = false;
++    this.setReconnectEnabled(true);
++    this.ensureConnected();
++  }
++
+   private verifyConnection(): void {
+     const transport = this.transport;
+     if (!transport || this.connectionVerification === transport) return;
+-- 
+2.50.1 (Apple Git-155)
+

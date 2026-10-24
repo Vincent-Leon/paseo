@@ -1,0 +1,601 @@
+From 0270f4fa6c33468f7e2dcee728b334c948e03f87 Mon Sep 17 00:00:00 2001
+From: Vincent Leon <leon@mbp.com>
+Date: Sat, 22 Aug 2026 12:41:29 +0800
+Subject: [PATCH 09/11] Let a push registration carry provider-defined metadata
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The provider seam typed a registration as a single opaque string, because that
+is what both channels in front of me were: an Expo token and an HMS token are
+each one value with no structure.
+
+UnifiedPush is not. A registration there is an endpoint URL plus the client's
+p256dh public key and auth secret, because RFC 8291 encryption happens on the
+sending side — the application server encrypts, so it needs the subscriber's
+keys. Squeezing that into the token string would make every provider parse a
+format only one of them uses.
+
+So `deliver` now receives PushSubscription objects rather than bare tokens, and
+the store keeps an optional per-registration metadata map alongside the expiry.
+Contents stay opaque to everything except the provider that wrote them.
+
+Renewal deliberately does not clear metadata: registration supplies it, and the
+15s client heartbeat that renews the lease does not. Without that rule a
+UnifiedPush subscription would lose its keys within a minute of being made.
+
+On disk the metadata rides inside each entry, so an older daemon reading the
+same PASEO_HOME still ignores the whole `providers` block as before.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+---
+ packages/protocol/src/messages.ts             |   5 +
+ packages/server/src/server/push/index.ts      |  26 ++--
+ .../server/push/providers/expo/provider.ts    |  11 +-
+ .../server/src/server/push/push-provider.ts   |  26 +++-
+ .../src/server/push/token-store.test.ts       |  78 +++++++++--
+ .../server/src/server/push/token-store.ts     | 122 +++++++++++++-----
+ packages/server/src/server/session.ts         |  10 +-
+ 7 files changed, 217 insertions(+), 61 deletions(-)
+
+diff --git a/packages/protocol/src/messages.ts b/packages/protocol/src/messages.ts
+index 2ec86c9ac..43629ff12 100644
+--- a/packages/protocol/src/messages.ts
++++ b/packages/protocol/src/messages.ts
+@@ -2954,6 +2954,11 @@ export const RegisterPushTokenMessageSchema = z.object({
+   // no client can still register a token without naming its delivery channel.
+   // Absent means Expo, which is the only channel that existed before this field.
+   provider: z.string().min(1).optional(),
++  // Provider-defined registration extras. A token is not always a single opaque
++  // string: UnifiedPush registers an endpoint URL plus the client's p256dh key
++  // and auth secret, because RFC 8291 encryption happens on the sending side.
++  // Expo and HMS carry none of this.
++  metadata: z.record(z.string(), z.string()).optional(),
+ });
+ 
+ export const PushUnregisterRequestSchema = z.object({
+diff --git a/packages/server/src/server/push/index.ts b/packages/server/src/server/push/index.ts
+index 0cb29adf6..767d7f940 100644
+--- a/packages/server/src/server/push/index.ts
++++ b/packages/server/src/server/push/index.ts
+@@ -1,11 +1,11 @@
+ import type pino from "pino";
+ 
+ import { PUSH_PROVIDERS } from "./manifest.js";
+-import type { PushPayload, PushProvider } from "./push-provider.js";
++import type { PushPayload, PushProvider, PushSubscription } from "./push-provider.js";
+ import { EXPO_PROVIDER_ID } from "./providers/expo/provider.js";
+ import { PushTokenStore } from "./token-store.js";
+ 
+-export type { PushPayload, PushProvider } from "./push-provider.js";
++export type { PushPayload, PushProvider, PushSubscription } from "./push-provider.js";
+ 
+ const PUSH_TOKEN_LEASE_MS = 48 * 60 * 60 * 1000;
+ 
+@@ -18,7 +18,8 @@ const PUSH_TOKEN_LEASE_MS = 48 * 60 * 60 * 1000;
+ export const DEFAULT_PUSH_PROVIDER = EXPO_PROVIDER_ID;
+ 
+ export interface PushNotifications {
+-  renew(token: string, provider?: string): void;
++  /** `metadata` is provider-defined and only supplied at registration. */
++  renew(token: string, provider?: string, metadata?: Record<string, string>): void;
+   revoke(token: string, provider?: string): void;
+   send(payload: PushPayload): Promise<void>;
+   /** Provider ids this daemon can actually deliver through, for capability gating. */
+@@ -53,8 +54,8 @@ export function createPushNotifications(options: {
+   }
+ 
+   return {
+-    renew(token, provider = EXPO_PROVIDER_ID) {
+-      store.renewToken(provider, token);
++    renew(token, provider = EXPO_PROVIDER_ID, metadata) {
++      store.renewToken(provider, token, metadata);
+     },
+     revoke(token, provider = EXPO_PROVIDER_ID) {
+       store.revokeToken(provider, token);
+@@ -63,32 +64,35 @@ export function createPushNotifications(options: {
+       return Array.from(providers.keys());
+     },
+     async send(payload) {
+-      const byProvider = store.getActiveTokensByProvider();
++      const byProvider = store.getActiveSubscriptionsByProvider();
+       const tokenCount = Array.from(byProvider.values()).reduce(
+-        (total, tokens) => total + tokens.length,
++        (total, subscriptions) => total + subscriptions.length,
+         0,
+       );
+       options.logger.info({ tokenCount }, "Sending push notification");
+       if (tokenCount === 0) return;
+ 
+       if (options.deliver) {
+-        await options.deliver(Array.from(byProvider.values()).flat(), payload);
++        const tokens = Array.from(byProvider.values())
++          .flat()
++          .map((subscription: PushSubscription) => subscription.token);
++        await options.deliver(tokens, payload);
+         return;
+       }
+ 
+       // One failing channel must not stop the others, so each is awaited
+       // independently and its revocations applied on its own.
+       await Promise.all(
+-        Array.from(byProvider, async ([providerId, tokens]) => {
++        Array.from(byProvider, async ([providerId, subscriptions]) => {
+           const provider = providers.get(providerId);
+           if (!provider) {
+             options.logger.warn(
+-              { provider: providerId, tokenCount: tokens.length },
++              { provider: providerId, tokenCount: subscriptions.length },
+               "No provider registered for stored tokens",
+             );
+             return;
+           }
+-          const result = await provider.deliver(tokens, payload);
++          const result = await provider.deliver(subscriptions, payload);
+           for (const token of result.revokedTokens ?? []) {
+             store.revokeToken(providerId, token);
+           }
+diff --git a/packages/server/src/server/push/providers/expo/provider.ts b/packages/server/src/server/push/providers/expo/provider.ts
+index bd4d1b21c..047121d24 100644
+--- a/packages/server/src/server/push/providers/expo/provider.ts
++++ b/packages/server/src/server/push/providers/expo/provider.ts
+@@ -5,6 +5,7 @@ import type {
+   PushPayload,
+   PushProvider,
+   PushProviderFactoryOptions,
++  PushSubscription,
+ } from "../../push-provider.js";
+ 
+ interface ExpoPushMessage {
+@@ -61,12 +62,16 @@ export class ExpoPushProvider implements PushProvider {
+     this.fetchImpl = options.fetch ?? fetch;
+   }
+ 
+-  async deliver(tokens: readonly string[], payload: PushPayload): Promise<PushDeliveryResult> {
+-    if (tokens.length === 0) {
++  async deliver(
++    subscriptions: readonly PushSubscription[],
++    payload: PushPayload,
++  ): Promise<PushDeliveryResult> {
++    if (subscriptions.length === 0) {
+       return {};
+     }
+ 
+-    const messages: ExpoPushMessage[] = tokens.map((token) => ({
++    // Expo needs no metadata; the token is the whole registration.
++    const messages: ExpoPushMessage[] = subscriptions.map(({ token }) => ({
+       to: token,
+       title: payload.title,
+       body: payload.body,
+diff --git a/packages/server/src/server/push/push-provider.ts b/packages/server/src/server/push/push-provider.ts
+index 8b96ef837..59dc71654 100644
+--- a/packages/server/src/server/push/push-provider.ts
++++ b/packages/server/src/server/push/push-provider.ts
+@@ -6,6 +6,24 @@ export interface PushPayload {
+   data?: Record<string, unknown>;
+ }
+ 
++/**
++ * One device's registration with one provider.
++ *
++ * `token` is the primary identifier and what the store keys on. `metadata`
++ * exists because a token is not always a single opaque string: UnifiedPush
++ * registers an endpoint URL plus the client's `p256dh` public key and `auth`
++ * secret, since RFC 8291 encryption happens on the sending side. Expo and HMS
++ * carry none.
++ *
++ * Contents are provider-defined; the store keeps them as opaque strings and only
++ * the owning provider interprets them.
++ */
++export interface PushSubscription {
++  readonly provider: string;
++  readonly token: string;
++  readonly metadata?: Readonly<Record<string, string>>;
++}
++
+ /**
+  * A delivery channel for push notifications.
+  *
+@@ -19,12 +37,15 @@ export interface PushProvider {
+   readonly providerId: string;
+ 
+   /**
+-   * Delivers to every token.
++   * Delivers to every subscription.
+    *
+    * Must not throw: one provider failing has to leave the others unaffected.
+    * Transport errors are the provider's own to log and swallow.
+    */
+-  deliver(tokens: readonly string[], payload: PushPayload): Promise<PushDeliveryResult>;
++  deliver(
++    subscriptions: readonly PushSubscription[],
++    payload: PushPayload,
++  ): Promise<PushDeliveryResult>;
+ }
+ 
+ export interface PushDeliveryResult {
+@@ -37,6 +58,7 @@ export interface PushDeliveryResult {
+    * cannot honour that, and would drop tokens that are still live on disk.
+    *
+    * Only permanent failures belong here. A timeout or a 500 is not one.
++   * Identified by token, which is unique within a provider.
+    */
+   readonly revokedTokens?: readonly string[];
+ }
+diff --git a/packages/server/src/server/push/token-store.test.ts b/packages/server/src/server/push/token-store.test.ts
+index d21287e06..8093e7392 100644
+--- a/packages/server/src/server/push/token-store.test.ts
++++ b/packages/server/src/server/push/token-store.test.ts
+@@ -86,7 +86,9 @@ describe("PushTokenStore persistence", () => {
+     rejectWrites = true;
+ 
+     expect(() => store.revokeToken("expo", "ExponentPushToken[test]")).toThrow("disk full");
+-    expect(store.getActiveTokensByProvider().get("expo")).toEqual(["ExponentPushToken[test]"]);
++    expect(store.getActiveSubscriptionsByProvider().get("expo")).toEqual([
++      { provider: "expo", token: "ExponentPushToken[test]" },
++    ]);
+     expect(JSON.parse(persisted)).toEqual({
+       subscriptions: [
+         {
+@@ -98,7 +100,7 @@ describe("PushTokenStore persistence", () => {
+ 
+     rejectWrites = false;
+     store.revokeToken("expo", "ExponentPushToken[test]");
+-    expect(store.getActiveTokensByProvider().size).toBe(0);
++    expect(store.getActiveSubscriptionsByProvider().size).toBe(0);
+     expect(JSON.parse(persisted)).toEqual({ subscriptions: [] });
+   });
+ });
+@@ -123,9 +125,9 @@ describe("PushTokenStore providers", () => {
+     store.renewToken("expo", "ExponentPushToken[a]");
+     store.renewToken("huawei", "hms-token-b");
+ 
+-    const active = store.getActiveTokensByProvider();
+-    expect(active.get("expo")).toEqual(["ExponentPushToken[a]"]);
+-    expect(active.get("huawei")).toEqual(["hms-token-b"]);
++    const active = store.getActiveSubscriptionsByProvider();
++    expect(active.get("expo")).toEqual([{ provider: "expo", token: "ExponentPushToken[a]" }]);
++    expect(active.get("huawei")).toEqual([{ provider: "huawei", token: "hms-token-b" }]);
+ 
+     // The layout is the compatibility contract: an older daemon reads only
+     // `subscriptions`, so it must contain Expo tokens and nothing else.
+@@ -145,8 +147,8 @@ describe("PushTokenStore providers", () => {
+ 
+     store.revokeToken("huawei", "hms-token-b");
+ 
+-    const active = store.getActiveTokensByProvider();
+-    expect(active.get("expo")).toEqual(["ExponentPushToken[a]"]);
++    const active = store.getActiveSubscriptionsByProvider();
++    expect(active.get("expo")).toEqual([{ provider: "expo", token: "ExponentPushToken[a]" }]);
+     expect(active.has("huawei")).toBe(false);
+   });
+ 
+@@ -168,15 +170,69 @@ describe("PushTokenStore providers", () => {
+       const store = makeStore((payload) => {
+         persisted = payload;
+       }, tokenPath);
+-      expect(store.getActiveTokensByProvider().get("expo")).toEqual(["ExponentPushToken[legacy]"]);
++      expect(store.getActiveSubscriptionsByProvider().get("expo")).toEqual([
++        { provider: "expo", token: "ExponentPushToken[legacy]" },
++      ]);
+ 
+       store.renewToken("huawei", "hms-token-c");
+       writeFileSync(tokenPath, persisted);
+ 
+       const reloaded = makeStore(() => undefined, tokenPath);
+-      const active = reloaded.getActiveTokensByProvider();
+-      expect(active.get("expo")).toEqual(["ExponentPushToken[legacy]"]);
+-      expect(active.get("huawei")).toEqual(["hms-token-c"]);
++      const active = reloaded.getActiveSubscriptionsByProvider();
++      expect(active.get("expo")).toEqual([
++        { provider: "expo", token: "ExponentPushToken[legacy]" },
++      ]);
++      expect(active.get("huawei")).toEqual([{ provider: "huawei", token: "hms-token-c" }]);
++    } finally {
++      rmSync(home, { recursive: true, force: true });
++    }
++  });
++});
++
++describe("PushTokenStore provider metadata", () => {
++  test("round-trips metadata and keeps it across a renewal that omits it", () => {
++    const home = mkdtempSync(path.join(tmpdir(), "paseo-push-metadata-"));
++    const tokenPath = path.join(home, "push-tokens.json");
++    try {
++      let now = Date.parse("2026-08-10T00:00:00.000Z");
++      const store = new PushTokenStore(createLogger(), tokenPath, () => now, 48 * 60 * 60 * 1000);
++
++      // UnifiedPush registers an endpoint plus the keys the sender encrypts with.
++      store.renewToken("unifiedpush", "https://push.example/UP123", {
++        p256dh: "BExampleKey",
++        auth: "ExampleAuth",
++      });
++
++      const registered = store.getActiveSubscriptionsByProvider().get("unifiedpush");
++      expect(registered).toEqual([
++        {
++          provider: "unifiedpush",
++          token: "https://push.example/UP123",
++          metadata: { p256dh: "BExampleKey", auth: "ExampleAuth" },
++        },
++      ]);
++
++      // A heartbeat renewal carries no metadata and must not erase it.
++      now += 25 * 60 * 60 * 1000;
++      store.renewToken("unifiedpush", "https://push.example/UP123");
++      expect(store.getActiveSubscriptionsByProvider().get("unifiedpush")?.[0]?.metadata).toEqual({
++        p256dh: "BExampleKey",
++        auth: "ExampleAuth",
++      });
++
++      // And it survives a reload from disk.
++      const reloaded = new PushTokenStore(
++        createLogger(),
++        tokenPath,
++        () => now,
++        48 * 60 * 60 * 1000,
++      );
++      expect(reloaded.getActiveSubscriptionsByProvider().get("unifiedpush")?.[0]?.metadata).toEqual(
++        {
++          p256dh: "BExampleKey",
++          auth: "ExampleAuth",
++        },
++      );
+     } finally {
+       rmSync(home, { recursive: true, force: true });
+     }
+diff --git a/packages/server/src/server/push/token-store.ts b/packages/server/src/server/push/token-store.ts
+index a4f23913c..a49bce94f 100644
+--- a/packages/server/src/server/push/token-store.ts
++++ b/packages/server/src/server/push/token-store.ts
+@@ -2,8 +2,15 @@ import type pino from "pino";
+ import { existsSync, readFileSync } from "node:fs";
+ 
+ import { ensurePrivateFile, writePrivateFileAtomicSync } from "../private-files.js";
++import type { PushSubscription } from "./push-provider.js";
+ import { EXPO_PROVIDER_ID } from "./providers/expo/provider.js";
+ 
++interface StoredSubscription {
++  expiresAt: number;
++  /** Provider-defined; opaque here. Absent for providers that need none. */
++  metadata?: Record<string, string>;
++}
++
+ /**
+  * Store for push tokens, keyed by provider.
+  *
+@@ -23,8 +30,8 @@ import { EXPO_PROVIDER_ID } from "./providers/expo/provider.js";
+  */
+ export class PushTokenStore {
+   private readonly logger: pino.Logger;
+-  /** provider id -> token -> expiry (epoch ms). */
+-  private subscriptions = new Map<string, Map<string, number>>();
++  /** provider id -> token -> stored subscription. */
++  private subscriptions = new Map<string, Map<string, StoredSubscription>>();
+   private readonly filePath: string;
+   private readonly now: () => number;
+   private readonly leaseMs: number;
+@@ -45,15 +52,32 @@ export class PushTokenStore {
+     this.loadFromDisk();
+   }
+ 
+-  renewToken(provider: string, token: string): void {
++  /**
++   * Registers or extends a lease.
++   *
++   * `metadata` is supplied at registration; a heartbeat renewal omits it and
++   * must not erase what is already stored.
++   */
++  renewToken(provider: string, token: string, metadata?: Record<string, string>): void {
+     const normalized = token.trim();
+     if (!normalized || !provider) return;
+     const now = this.now();
+-    const currentExpiry = this.subscriptions.get(provider)?.get(normalized);
+-    if (currentExpiry !== undefined && currentExpiry - now > this.leaseMs / 2) return;
++    const existing = this.subscriptions.get(provider)?.get(normalized);
++    const metadataUnchanged = metadata === undefined || sameMetadata(existing?.metadata, metadata);
++    if (
++      existing !== undefined &&
++      metadataUnchanged &&
++      existing.expiresAt - now > this.leaseMs / 2
++    ) {
++      return;
++    }
+     const next = this.clone();
+-    const forProvider = next.get(provider) ?? new Map<string, number>();
+-    forProvider.set(normalized, now + this.leaseMs);
++    const forProvider = next.get(provider) ?? new Map<string, StoredSubscription>();
++    const nextMetadata = metadata ?? existing?.metadata;
++    forProvider.set(normalized, {
++      expiresAt: now + this.leaseMs,
++      ...(nextMetadata ? { metadata: nextMetadata } : {}),
++    });
+     next.set(provider, forProvider);
+     this.persist(next);
+     this.subscriptions = next;
+@@ -73,16 +97,16 @@ export class PushTokenStore {
+     this.logger.debug({ provider, total: this.total() }, "Revoked token");
+   }
+ 
+-  /** Live tokens grouped by provider, pruning anything expired. */
+-  getActiveTokensByProvider(): Map<string, string[]> {
++  /** Live subscriptions grouped by provider, pruning anything expired. */
++  getActiveSubscriptionsByProvider(): Map<string, PushSubscription[]> {
+     const now = this.now();
+-    const active = new Map<string, Map<string, number>>();
++    const active = new Map<string, Map<string, StoredSubscription>>();
+     let pruned = false;
+ 
+     for (const [provider, tokens] of this.subscriptions) {
+-      const live = new Map<string, number>();
+-      for (const [token, expiresAt] of tokens) {
+-        if (expiresAt > now) live.set(token, expiresAt);
++      const live = new Map<string, StoredSubscription>();
++      for (const [token, stored] of tokens) {
++        if (stored.expiresAt > now) live.set(token, stored);
+         else pruned = true;
+       }
+       if (live.size > 0) active.set(provider, live);
+@@ -99,9 +123,16 @@ export class PushTokenStore {
+       }
+     }
+ 
+-    const result = new Map<string, string[]>();
++    const result = new Map<string, PushSubscription[]>();
+     for (const [provider, tokens] of active) {
+-      result.set(provider, Array.from(tokens.keys()));
++      result.set(
++        provider,
++        Array.from(tokens, ([token, stored]) => ({
++          provider,
++          token,
++          ...(stored.metadata ? { metadata: stored.metadata } : {}),
++        })),
++      );
+     }
+     return result;
+   }
+@@ -112,8 +143,8 @@ export class PushTokenStore {
+     return count;
+   }
+ 
+-  private clone(): Map<string, Map<string, number>> {
+-    const next = new Map<string, Map<string, number>>();
++  private clone(): Map<string, Map<string, StoredSubscription>> {
++    const next = new Map<string, Map<string, StoredSubscription>>();
+     for (const [provider, tokens] of this.subscriptions) {
+       next.set(provider, new Map(tokens));
+     }
+@@ -132,7 +163,7 @@ export class PushTokenStore {
+         tokens?: unknown;
+         providers?: unknown;
+       };
+-      const loaded = new Map<string, Map<string, number>>();
++      const loaded = new Map<string, Map<string, StoredSubscription>>();
+ 
+       // COMPAT(pushProviders): `subscriptions` predates provider ids and can
+       // only ever have held Expo tokens. Remove after 2027-02-01, once no
+@@ -156,11 +187,11 @@ export class PushTokenStore {
+         : [];
+       if (legacyTokens.length > 0) {
+         const migrated = this.clone();
+-        const forExpo = migrated.get(EXPO_PROVIDER_ID) ?? new Map<string, number>();
++        const forExpo = migrated.get(EXPO_PROVIDER_ID) ?? new Map<string, StoredSubscription>();
+         const expiresAt = this.now() + this.leaseMs;
+         for (const token of legacyTokens) {
+           const normalized = token.trim();
+-          if (normalized) forExpo.set(normalized, expiresAt);
++          if (normalized) forExpo.set(normalized, { expiresAt });
+         }
+         migrated.set(EXPO_PROVIDER_ID, forExpo);
+         this.persist(migrated);
+@@ -173,9 +204,11 @@ export class PushTokenStore {
+     }
+   }
+ 
+-  private persist(subscriptions: ReadonlyMap<string, ReadonlyMap<string, number>>): void {
++  private persist(
++    subscriptions: ReadonlyMap<string, ReadonlyMap<string, StoredSubscription>>,
++  ): void {
+     try {
+-      const providers: Record<string, { token: string; expiresAt: string }[]> = {};
++      const providers: Record<string, SerialisedSubscription[]> = {};
+       for (const [provider, tokens] of subscriptions) {
+         if (provider === EXPO_PROVIDER_ID) continue;
+         providers[provider] = serialiseList(tokens);
+@@ -199,25 +232,52 @@ export class PushTokenStore {
+   }
+ }
+ 
+-function readSubscriptionList(value: unknown): Map<string, number> {
+-  const loaded = new Map<string, number>();
++interface SerialisedSubscription {
++  token: string;
++  expiresAt: string;
++  metadata?: Record<string, string>;
++}
++
++function readSubscriptionList(value: unknown): Map<string, StoredSubscription> {
++  const loaded = new Map<string, StoredSubscription>();
+   if (!Array.isArray(value)) return loaded;
+   for (const entry of value) {
+     if (!entry || typeof entry !== "object") continue;
+-    const candidate = entry as { token?: unknown; expiresAt?: unknown };
++    const candidate = entry as { token?: unknown; expiresAt?: unknown; metadata?: unknown };
+     if (typeof candidate.token !== "string" || typeof candidate.expiresAt !== "string") continue;
+     const token = candidate.token.trim();
+     const expiresAt = Date.parse(candidate.expiresAt);
+-    if (token && Number.isFinite(expiresAt)) loaded.set(token, expiresAt);
++    if (!token || !Number.isFinite(expiresAt)) continue;
++    const metadata = readMetadata(candidate.metadata);
++    loaded.set(token, { expiresAt, ...(metadata ? { metadata } : {}) });
+   }
+   return loaded;
+ }
+ 
+-function serialiseList(
+-  tokens: ReadonlyMap<string, number>,
+-): { token: string; expiresAt: string }[] {
+-  return Array.from(tokens, ([token, expiresAt]) => ({
++/** Strings only — anything else is a provider bug, not something to persist. */
++function readMetadata(value: unknown): Record<string, string> | undefined {
++  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
++  const entries = Object.entries(value as Record<string, unknown>).filter(
++    (entry): entry is [string, string] => typeof entry[1] === "string",
++  );
++  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
++}
++
++function sameMetadata(
++  a: Record<string, string> | undefined,
++  b: Record<string, string> | undefined,
++): boolean {
++  if (a === b) return true;
++  if (!a || !b) return false;
++  const keys = Object.keys(a);
++  if (keys.length !== Object.keys(b).length) return false;
++  return keys.every((key) => a[key] === b[key]);
++}
++
++function serialiseList(tokens: ReadonlyMap<string, StoredSubscription>): SerialisedSubscription[] {
++  return Array.from(tokens, ([token, stored]) => ({
+     token,
+-    expiresAt: new Date(expiresAt).toISOString(),
++    expiresAt: new Date(stored.expiresAt).toISOString(),
++    ...(stored.metadata ? { metadata: stored.metadata } : {}),
+   }));
+ }
+diff --git a/packages/server/src/server/session.ts b/packages/server/src/server/session.ts
+index cf6ca8a6a..7252345b2 100644
+--- a/packages/server/src/server/session.ts
++++ b/packages/server/src/server/session.ts
+@@ -3195,7 +3195,7 @@ export class Session {
+         await this.handleListCommandsRequest(msg);
+         return;
+       case "register_push_token":
+-        this.handleRegisterPushToken(msg.token, msg.provider);
++        this.handleRegisterPushToken(msg.token, msg.provider, msg.metadata);
+         return;
+       case "push.unregister.request":
+         {
+@@ -5026,11 +5026,15 @@ export class Session {
+   /**
+    * Handle push token registration
+    */
+-  private handleRegisterPushToken(token: string, provider?: string): void {
++  private handleRegisterPushToken(
++    token: string,
++    provider?: string,
++    metadata?: Record<string, string>,
++  ): void {
+     // COMPAT(pushProviders): absent provider means Expo — see the schema.
+     const resolved = provider ?? DEFAULT_PUSH_PROVIDER;
+     this.currentClientMetadata().pushToken = { provider: resolved, token };
+-    this.pushNotifications.renew(token, resolved);
++    this.pushNotifications.renew(token, resolved, metadata);
+     this.sessionLogger.info({ provider: resolved }, "Registered push token");
+   }
+ 
+-- 
+2.50.1 (Apple Git-155)
+

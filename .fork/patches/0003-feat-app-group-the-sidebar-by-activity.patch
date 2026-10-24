@@ -1,7 +1,7 @@
-From 332672e841804673728e70f5a9bad8bd58b28629 Mon Sep 17 00:00:00 2001
+From 6f708c2e01135afe5abccd7c48d8e4f73711e64b Mon Sep 17 00:00:00 2001
 From: Vincent Leon <leon@mbp.com>
 Date: Thu, 22 Oct 2026 14:29:04 +0800
-Subject: [PATCH 3/7] feat(app): group the sidebar by activity
+Subject: [PATCH 03/11] feat(app): group the sidebar by activity
 
 Add an Activity grouping mode next to Project and Status. Live work keeps
 its status buckets at the top: needs input, failed, ready to review and
@@ -317,7 +317,7 @@ index 000000000..4133d26be
 +  return [...groups, ...projectGroups];
 +}
 diff --git a/packages/app/src/components/sidebar/display-preferences/menu.tsx b/packages/app/src/components/sidebar/display-preferences/menu.tsx
-index 4fb04ebb6..633b5645e 100644
+index d6483a551..0984fc268 100644
 --- a/packages/app/src/components/sidebar/display-preferences/menu.tsx
 +++ b/packages/app/src/components/sidebar/display-preferences/menu.tsx
 @@ -10,11 +10,15 @@ import { useTranslation } from "react-i18next";
@@ -403,7 +403,7 @@ index 4fb04ebb6..633b5645e 100644
        {
          id: "titleSource",
          title: t("sidebar.display.titleSource.label"),
-@@ -333,6 +367,16 @@ export function SidebarDisplayPreferencesMenu(): ReactElement {
+@@ -331,6 +365,16 @@ export function SidebarDisplayPreferencesMenu(): ReactElement {
                {t("sidebar.display.sort.label")}
              </MenuSubTrigger>
            ) : null}
@@ -624,7 +624,7 @@ index 2e84f02aa..f149f5e5e 100644
    }
  }
 diff --git a/packages/app/src/components/sidebar/sidebar-status-list.tsx b/packages/app/src/components/sidebar/sidebar-status-list.tsx
-index 28575df64..9f5639de6 100644
+index 44622385a..0626f6960 100644
 --- a/packages/app/src/components/sidebar/sidebar-status-list.tsx
 +++ b/packages/app/src/components/sidebar/sidebar-status-list.tsx
 @@ -61,6 +61,7 @@ import {
@@ -756,7 +756,7 @@ index 28575df64..9f5639de6 100644
  function StatusGroupIcon({ bucket }: { bucket: StatusBucket }) {
    switch (bucket) {
      case "needs_input":
-@@ -519,7 +559,7 @@ const StatusWorkspaceRow = memo(function StatusWorkspaceRow({
+@@ -518,7 +558,7 @@ const StatusWorkspaceRow = memo(function StatusWorkspaceRow({
  }: {
    workspace: SidebarWorkspaceEntry;
    hostBadge: HostBadgeModel | null;
@@ -765,7 +765,7 @@ index 28575df64..9f5639de6 100644
    projectIconDataUri: string | null;
    shortcutNumber: number | null;
    showShortcutBadge: boolean;
-@@ -587,7 +627,7 @@ function StatusWorkspaceRowWithMenu({
+@@ -585,7 +625,7 @@ function StatusWorkspaceRowWithMenu({
  }: {
    workspace: SidebarWorkspaceEntry;
    hostBadge: HostBadgeModel | null;
@@ -774,7 +774,7 @@ index 28575df64..9f5639de6 100644
    projectIconDataUri: string | null;
    selected: boolean;
    shortcutNumber: number | null;
-@@ -724,7 +764,7 @@ function StatusWorkspaceRowWithMenu({
+@@ -722,7 +762,7 @@ function StatusWorkspaceRowWithMenu({
  interface StatusWorkspaceRowInnerProps {
    workspace: SidebarWorkspaceEntry;
    hostBadge: HostBadgeModel | null;
@@ -797,7 +797,7 @@ index 5736c7f39..774a49adc 100644
    b: SidebarWorkspaceEntry,
    projectNamesByViewKey: Map<string, string>,
 diff --git a/packages/app/src/i18n/resources/ar.ts b/packages/app/src/i18n/resources/ar.ts
-index 16779d95e..f3d08bcb4 100644
+index c765f3b83..64dd74c57 100644
 --- a/packages/app/src/i18n/resources/ar.ts
 +++ b/packages/app/src/i18n/resources/ar.ts
 @@ -1162,6 +1162,13 @@ export const ar: TranslationResources = {
@@ -814,7 +814,7 @@ index 16779d95e..f3d08bcb4 100644
      display: {
        showBackground: "إظهار مساحات العمل في الخلفية",
        trigger: "تفضيلات العرض",
-@@ -1176,8 +1183,15 @@ export const ar: TranslationResources = {
+@@ -1177,8 +1184,15 @@ export const ar: TranslationResources = {
          label: "التجميع",
          project: "المشروع",
          status: "الحالة",
@@ -831,7 +831,7 @@ index 16779d95e..f3d08bcb4 100644
          label: "العنوان",
          title: "العنوان",
 diff --git a/packages/app/src/i18n/resources/en.ts b/packages/app/src/i18n/resources/en.ts
-index 6471b03f6..386035c00 100644
+index 351fb33ac..f14d74966 100644
 --- a/packages/app/src/i18n/resources/en.ts
 +++ b/packages/app/src/i18n/resources/en.ts
 @@ -1170,6 +1170,13 @@ export const en = {
@@ -848,7 +848,7 @@ index 6471b03f6..386035c00 100644
      display: {
        showBackground: "Show background",
        trigger: "Display preferences",
-@@ -1184,8 +1191,15 @@ export const en = {
+@@ -1185,8 +1192,15 @@ export const en = {
          label: "Grouping",
          project: "Project",
          status: "Status",
@@ -865,7 +865,7 @@ index 6471b03f6..386035c00 100644
          label: "Title",
          title: "Title",
 diff --git a/packages/app/src/i18n/resources/es.ts b/packages/app/src/i18n/resources/es.ts
-index 82ab9e697..9d9e4d9c0 100644
+index fd195ce59..6199a6631 100644
 --- a/packages/app/src/i18n/resources/es.ts
 +++ b/packages/app/src/i18n/resources/es.ts
 @@ -1198,6 +1198,13 @@ export const es: TranslationResources = {
@@ -882,7 +882,7 @@ index 82ab9e697..9d9e4d9c0 100644
      display: {
        showBackground: "Mostrar espacios en segundo plano",
        trigger: "Preferencias de visualización",
-@@ -1212,8 +1219,15 @@ export const es: TranslationResources = {
+@@ -1213,8 +1220,15 @@ export const es: TranslationResources = {
          label: "Agrupación",
          project: "Proyecto",
          status: "Estado",
@@ -899,7 +899,7 @@ index 82ab9e697..9d9e4d9c0 100644
          label: "Título",
          title: "Título",
 diff --git a/packages/app/src/i18n/resources/fr.ts b/packages/app/src/i18n/resources/fr.ts
-index 44aae8762..d9e14110f 100644
+index 975d6a373..2c5cffa52 100644
 --- a/packages/app/src/i18n/resources/fr.ts
 +++ b/packages/app/src/i18n/resources/fr.ts
 @@ -1191,6 +1191,13 @@ export const fr: TranslationResources = {
@@ -916,7 +916,7 @@ index 44aae8762..d9e14110f 100644
      display: {
        showBackground: "Afficher les espaces en arrière-plan",
        trigger: "Préférences d’affichage",
-@@ -1205,8 +1212,15 @@ export const fr: TranslationResources = {
+@@ -1206,8 +1213,15 @@ export const fr: TranslationResources = {
          label: "Regroupement",
          project: "Projet",
          status: "Statut",
@@ -933,7 +933,7 @@ index 44aae8762..d9e14110f 100644
          label: "Titre",
          title: "Titre",
 diff --git a/packages/app/src/i18n/resources/ja.ts b/packages/app/src/i18n/resources/ja.ts
-index baa248aa3..8c72e32e8 100644
+index 60a207e1e..023350743 100644
 --- a/packages/app/src/i18n/resources/ja.ts
 +++ b/packages/app/src/i18n/resources/ja.ts
 @@ -1175,6 +1175,13 @@ export const ja: TranslationResources = {
@@ -950,7 +950,7 @@ index baa248aa3..8c72e32e8 100644
      display: {
        showBackground: "バックグラウンドを表示",
        trigger: "表示設定",
-@@ -1189,8 +1196,15 @@ export const ja: TranslationResources = {
+@@ -1190,8 +1197,15 @@ export const ja: TranslationResources = {
          label: "グループ化",
          project: "プロジェクト",
          status: "ステータス",
@@ -967,7 +967,7 @@ index baa248aa3..8c72e32e8 100644
          label: "タイトル",
          title: "タイトル",
 diff --git a/packages/app/src/i18n/resources/ko.ts b/packages/app/src/i18n/resources/ko.ts
-index a573ef1ff..7d7771be2 100644
+index 477362532..007d6d7f4 100644
 --- a/packages/app/src/i18n/resources/ko.ts
 +++ b/packages/app/src/i18n/resources/ko.ts
 @@ -1169,6 +1169,13 @@ export const ko: TranslationResources = {
@@ -984,7 +984,7 @@ index a573ef1ff..7d7771be2 100644
      display: {
        showBackground: "백그라운드 표시",
        trigger: "표시 설정",
-@@ -1183,8 +1190,15 @@ export const ko: TranslationResources = {
+@@ -1184,8 +1191,15 @@ export const ko: TranslationResources = {
          label: "그룹화",
          project: "프로젝트",
          status: "상태",
@@ -1001,7 +1001,7 @@ index a573ef1ff..7d7771be2 100644
          label: "제목",
          title: "제목",
 diff --git a/packages/app/src/i18n/resources/pt-BR.ts b/packages/app/src/i18n/resources/pt-BR.ts
-index 43c32d291..350b5fb41 100644
+index 766c6d98e..c70fb9ca5 100644
 --- a/packages/app/src/i18n/resources/pt-BR.ts
 +++ b/packages/app/src/i18n/resources/pt-BR.ts
 @@ -1188,6 +1188,13 @@ export const ptBR: TranslationResources = {
@@ -1018,7 +1018,7 @@ index 43c32d291..350b5fb41 100644
      display: {
        showBackground: "Mostrar espaços em segundo plano",
        trigger: "Preferências de exibição",
-@@ -1202,8 +1209,15 @@ export const ptBR: TranslationResources = {
+@@ -1203,8 +1210,15 @@ export const ptBR: TranslationResources = {
          label: "Agrupamento",
          project: "Projeto",
          status: "Status",
@@ -1035,7 +1035,7 @@ index 43c32d291..350b5fb41 100644
          label: "Título",
          title: "Título",
 diff --git a/packages/app/src/i18n/resources/ru.ts b/packages/app/src/i18n/resources/ru.ts
-index 586ad8595..7e6aa23e0 100644
+index 23f3d810e..c7db6ae2b 100644
 --- a/packages/app/src/i18n/resources/ru.ts
 +++ b/packages/app/src/i18n/resources/ru.ts
 @@ -1179,6 +1179,13 @@ export const ru: TranslationResources = {
@@ -1052,7 +1052,7 @@ index 586ad8595..7e6aa23e0 100644
      display: {
        showBackground: "Показать фоновые пространства",
        trigger: "Настройки отображения",
-@@ -1193,8 +1200,15 @@ export const ru: TranslationResources = {
+@@ -1194,8 +1201,15 @@ export const ru: TranslationResources = {
          label: "Группировка",
          project: "Проект",
          status: "Статус",
@@ -1069,7 +1069,7 @@ index 586ad8595..7e6aa23e0 100644
          label: "Заголовок",
          title: "Заголовок",
 diff --git a/packages/app/src/i18n/resources/zh-CN.ts b/packages/app/src/i18n/resources/zh-CN.ts
-index 08bb8491c..bfd007db2 100644
+index 43d8ceeef..b60c817e7 100644
 --- a/packages/app/src/i18n/resources/zh-CN.ts
 +++ b/packages/app/src/i18n/resources/zh-CN.ts
 @@ -1154,6 +1154,13 @@ export const zhCN: TranslationResources = {
@@ -1086,7 +1086,7 @@ index 08bb8491c..bfd007db2 100644
      display: {
        showBackground: "显示后台工作区",
        trigger: "显示偏好",
-@@ -1168,8 +1175,15 @@ export const zhCN: TranslationResources = {
+@@ -1169,8 +1176,15 @@ export const zhCN: TranslationResources = {
          label: "分组",
          project: "项目",
          status: "状态",
@@ -1103,7 +1103,7 @@ index 08bb8491c..bfd007db2 100644
          label: "标题",
          title: "标题",
 diff --git a/packages/app/src/stores/sidebar-view-store.test.ts b/packages/app/src/stores/sidebar-view-store.test.ts
-index a9e44e146..d5cc0184f 100644
+index 4a277ae60..72fc9de52 100644
 --- a/packages/app/src/stores/sidebar-view-store.test.ts
 +++ b/packages/app/src/stores/sidebar-view-store.test.ts
 @@ -34,6 +34,7 @@ describe("sidebar view store", () => {
@@ -1183,7 +1183,7 @@ index a9e44e146..d5cc0184f 100644
        hostFilters: [],
        projectFilters: [],
 diff --git a/packages/app/src/stores/sidebar-view-store.ts b/packages/app/src/stores/sidebar-view-store.ts
-index 229e95f96..0e18923e2 100644
+index 1b53fdfe9..a996f7194 100644
 --- a/packages/app/src/stores/sidebar-view-store.ts
 +++ b/packages/app/src/stores/sidebar-view-store.ts
 @@ -6,7 +6,11 @@ import { z } from "zod";
@@ -1233,7 +1233,7 @@ index 229e95f96..0e18923e2 100644
    labels: z.array(z.string()),
  });
 @@ -94,6 +102,7 @@ const SidebarViewPersistedStateSchema = z.strictObject({
-   workspaceSort: z.enum(["created", "lastPrompt"]).optional(),
+   workspaceSort: z.enum(["manual", "created", "lastPrompt"]).optional(),
    showBackground: z.boolean().optional(),
    groupMode: PersistedSidebarGroupModeSchema.optional(),
 +  activityWindow: SidebarActivityWindowSchema.optional(),
