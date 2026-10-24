@@ -1,0 +1,383 @@
+From 4a3efa65c2ab00319f3019d88b7a21e598c679b9 Mon Sep 17 00:00:00 2001
+From: Vincent Leon <leon@mbp.com>
+Date: Sat, 24 Oct 2026 22:40:51 +0800
+Subject: [PATCH] feat(app): offer 24 and 48 hour windows for finished work
+
+The Done within row in activity grouping now lists 24 hours and 48 hours
+after Today. Both are rolling windows counted back from now, so work
+finished yesterday afternoon can stay under Done the next morning, which
+Today drops at midnight.
+
+The persisted sidebar view schema accepts the new values; a value the
+schema rejected would discard the whole saved view.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../sidebar/activity-groups.test.ts           | 20 ++++++++++++++++++-
+ .../src/components/sidebar/activity-groups.ts |  6 ++++++
+ .../sidebar/display-preferences/menu.tsx      |  6 ++++++
+ packages/app/src/i18n/resources/ar.ts         |  4 ++++
+ packages/app/src/i18n/resources/en.ts         |  4 ++++
+ packages/app/src/i18n/resources/es.ts         |  4 ++++
+ packages/app/src/i18n/resources/fr.ts         |  4 ++++
+ packages/app/src/i18n/resources/ja.ts         |  4 ++++
+ packages/app/src/i18n/resources/ko.ts         |  4 ++++
+ packages/app/src/i18n/resources/pt-BR.ts      |  4 ++++
+ packages/app/src/i18n/resources/ru.ts         |  4 ++++
+ packages/app/src/i18n/resources/zh-CN.ts      |  4 ++++
+ .../app/src/stores/sidebar-view-store.test.ts |  9 +++++++++
+ packages/app/src/stores/sidebar-view-store.ts | 12 ++++++++---
+ 14 files changed, 85 insertions(+), 4 deletions(-)
+
+diff --git a/packages/app/src/components/sidebar/activity-groups.test.ts b/packages/app/src/components/sidebar/activity-groups.test.ts
+index 30e15b1c6..9d6b34f22 100644
+--- a/packages/app/src/components/sidebar/activity-groups.test.ts
++++ b/packages/app/src/components/sidebar/activity-groups.test.ts
+@@ -1,6 +1,7 @@
+ import { i18n } from "@/i18n/i18next";
+ import { describe, expect, it } from "vitest";
+ import type { SidebarWorkspaceEntry } from "@/hooks/use-sidebar-workspaces-list";
++import type { SidebarActivityWindow } from "@/stores/sidebar-view-store";
+ import { buildActivityGroups } from "./activity-groups";
+ 
+ // Built from local fields so "today" means the same calendar day in every test time zone.
+@@ -43,7 +44,7 @@ function ws(
+   };
+ }
+ 
+-function summarize(workspaces: SidebarWorkspaceEntry[], window: "3h" | "12h" | "today") {
++function summarize(workspaces: SidebarWorkspaceEntry[], window: SidebarActivityWindow) {
+   return buildActivityGroups({
+     workspaces,
+     projectNamesByViewKey: new Map([
+@@ -145,6 +146,23 @@ describe("buildActivityGroups", () => {
+     ]);
+   });
+ 
++  it("reaches a day or two back from now, across midnight", () => {
++    const workspaces = [
++      ws("yesterday-afternoon", { enteredAt: NOW - 20 * HOUR }),
++      ws("yesterday-morning", { enteredAt: NOW - 30 * HOUR }),
++      ws("two-days-ago", { enteredAt: NOW - 50 * HOUR }),
++    ];
++
++    expect(summarize(workspaces, "24h").map((group) => [group.label, group.rows])).toEqual([
++      ["Done in the last 24 hours", ["yesterday-afternoon"]],
++      ["Alpha", ["yesterday-morning", "two-days-ago"]],
++    ]);
++    expect(summarize(workspaces, "48h").map((group) => [group.label, group.rows])).toEqual([
++      ["Done in the last 48 hours", ["yesterday-afternoon", "yesterday-morning"]],
++      ["Alpha", ["two-days-ago"]],
++    ]);
++  });
++
+   it("orders older projects by their latest finished workspace, newest first", () => {
+     const groups = summarize(
+       [
+diff --git a/packages/app/src/components/sidebar/activity-groups.ts b/packages/app/src/components/sidebar/activity-groups.ts
+index 4133d26be..06a1aa297 100644
+--- a/packages/app/src/components/sidebar/activity-groups.ts
++++ b/packages/app/src/components/sidebar/activity-groups.ts
+@@ -10,6 +10,8 @@ const DONE_LABEL_KEYS = {
+   "3h": "sidebar.activity.doneWithin.threeHours",
+   "12h": "sidebar.activity.doneWithin.twelveHours",
+   today: "sidebar.activity.doneWithin.today",
++  "24h": "sidebar.activity.doneWithin.twentyFourHours",
++  "48h": "sidebar.activity.doneWithin.fortyEightHours",
+ } as const satisfies Record<SidebarActivityWindow, string>;
+ 
+ export interface ActivityGroupsInput {
+@@ -29,6 +31,10 @@ export function activityWindowStart(window: SidebarActivityWindow, now: number):
+       return now - 12 * HOUR_MS;
+     case "today":
+       return new Date(now).setHours(0, 0, 0, 0);
++    case "24h":
++      return now - 24 * HOUR_MS;
++    case "48h":
++      return now - 48 * HOUR_MS;
+   }
+ }
+ 
+diff --git a/packages/app/src/components/sidebar/display-preferences/menu.tsx b/packages/app/src/components/sidebar/display-preferences/menu.tsx
+index 0984fc268..f35ccd702 100644
+--- a/packages/app/src/components/sidebar/display-preferences/menu.tsx
++++ b/packages/app/src/components/sidebar/display-preferences/menu.tsx
+@@ -11,7 +11,9 @@ import { View, type PressableStateCallbackType } from "react-native";
+ import { StyleSheet, withUnistyles } from "react-native-unistyles";
+ import {
+   Activity,
++  CalendarClock,
+   CalendarDays,
++  CalendarRange,
+   Captions,
+   Circle,
+   CircleCheck,
+@@ -102,6 +104,8 @@ const ACTIVITY_WINDOW_ICONS: Record<SidebarActivityWindow, OptionIcon> = {
+   "3h": withUnistyles(Clock3),
+   "12h": withUnistyles(Clock12),
+   today: withUnistyles(CalendarDays),
++  "24h": withUnistyles(CalendarClock),
++  "48h": withUnistyles(CalendarRange),
+ };
+ 
+ const TITLE_SOURCE_ICONS: Record<WorkspaceTitleSource, OptionIcon> = {
+@@ -147,6 +151,8 @@ const ACTIVITY_WINDOW_LABEL_KEYS: Record<SidebarActivityWindow, string> = {
+   "3h": "sidebar.display.activityWindow.threeHours",
+   "12h": "sidebar.display.activityWindow.twelveHours",
+   today: "sidebar.display.activityWindow.today",
++  "24h": "sidebar.display.activityWindow.twentyFourHours",
++  "48h": "sidebar.display.activityWindow.fortyEightHours",
+ };
+ 
+ const TITLE_SOURCE_LABEL_KEYS: Record<WorkspaceTitleSource, string> = {
+diff --git a/packages/app/src/i18n/resources/ar.ts b/packages/app/src/i18n/resources/ar.ts
+index 6d4ea8703..ea1de8824 100644
+--- a/packages/app/src/i18n/resources/ar.ts
++++ b/packages/app/src/i18n/resources/ar.ts
+@@ -1167,6 +1167,8 @@ export const ar: TranslationResources = {
+         threeHours: "تم خلال آخر 3 ساعات",
+         twelveHours: "تم خلال آخر 12 ساعة",
+         today: "تم اليوم",
++        twentyFourHours: "تم خلال آخر 24 ساعة",
++        fortyEightHours: "تم خلال آخر 48 ساعة",
+       },
+       earlier: {
+         title: "أقدم",
+@@ -1197,6 +1199,8 @@ export const ar: TranslationResources = {
+         threeHours: "3 ساعات",
+         twelveHours: "12 ساعة",
+         today: "اليوم",
++        twentyFourHours: "24 ساعة",
++        fortyEightHours: "48 ساعة",
+       },
+       titleSource: {
+         label: "العنوان",
+diff --git a/packages/app/src/i18n/resources/en.ts b/packages/app/src/i18n/resources/en.ts
+index e50d6f100..e52b2ccb2 100644
+--- a/packages/app/src/i18n/resources/en.ts
++++ b/packages/app/src/i18n/resources/en.ts
+@@ -1175,6 +1175,8 @@ export const en = {
+         threeHours: "Done in the last 3 hours",
+         twelveHours: "Done in the last 12 hours",
+         today: "Done today",
++        twentyFourHours: "Done in the last 24 hours",
++        fortyEightHours: "Done in the last 48 hours",
+       },
+       earlier: {
+         title: "Earlier",
+@@ -1205,6 +1207,8 @@ export const en = {
+         threeHours: "3 hours",
+         twelveHours: "12 hours",
+         today: "Today",
++        twentyFourHours: "24 hours",
++        fortyEightHours: "48 hours",
+       },
+       titleSource: {
+         label: "Title",
+diff --git a/packages/app/src/i18n/resources/es.ts b/packages/app/src/i18n/resources/es.ts
+index 606a9e919..8c9ebfcf9 100644
+--- a/packages/app/src/i18n/resources/es.ts
++++ b/packages/app/src/i18n/resources/es.ts
+@@ -1203,6 +1203,8 @@ export const es: TranslationResources = {
+         threeHours: "Terminado en las últimas 3 horas",
+         twelveHours: "Terminado en las últimas 12 horas",
+         today: "Terminado hoy",
++        twentyFourHours: "Terminado en las últimas 24 horas",
++        fortyEightHours: "Terminado en las últimas 48 horas",
+       },
+       earlier: {
+         title: "Anteriores",
+@@ -1233,6 +1235,8 @@ export const es: TranslationResources = {
+         threeHours: "3 horas",
+         twelveHours: "12 horas",
+         today: "Hoy",
++        twentyFourHours: "24 horas",
++        fortyEightHours: "48 horas",
+       },
+       titleSource: {
+         label: "Título",
+diff --git a/packages/app/src/i18n/resources/fr.ts b/packages/app/src/i18n/resources/fr.ts
+index fbbb0784a..728e88d9d 100644
+--- a/packages/app/src/i18n/resources/fr.ts
++++ b/packages/app/src/i18n/resources/fr.ts
+@@ -1196,6 +1196,8 @@ export const fr: TranslationResources = {
+         threeHours: "Terminé ces 3 dernières heures",
+         twelveHours: "Terminé ces 12 dernières heures",
+         today: "Terminé aujourd’hui",
++        twentyFourHours: "Terminé ces 24 dernières heures",
++        fortyEightHours: "Terminé ces 48 dernières heures",
+       },
+       earlier: {
+         title: "Plus ancien",
+@@ -1226,6 +1228,8 @@ export const fr: TranslationResources = {
+         threeHours: "3 heures",
+         twelveHours: "12 heures",
+         today: "Aujourd’hui",
++        twentyFourHours: "24 heures",
++        fortyEightHours: "48 heures",
+       },
+       titleSource: {
+         label: "Titre",
+diff --git a/packages/app/src/i18n/resources/ja.ts b/packages/app/src/i18n/resources/ja.ts
+index cf914897d..4dbebb3ae 100644
+--- a/packages/app/src/i18n/resources/ja.ts
++++ b/packages/app/src/i18n/resources/ja.ts
+@@ -1180,6 +1180,8 @@ export const ja: TranslationResources = {
+         threeHours: "過去3時間に完了",
+         twelveHours: "過去12時間に完了",
+         today: "今日完了",
++        twentyFourHours: "過去24時間に完了",
++        fortyEightHours: "過去48時間に完了",
+       },
+       earlier: {
+         title: "それ以前",
+@@ -1210,6 +1212,8 @@ export const ja: TranslationResources = {
+         threeHours: "3時間",
+         twelveHours: "12時間",
+         today: "今日",
++        twentyFourHours: "24時間",
++        fortyEightHours: "48時間",
+       },
+       titleSource: {
+         label: "タイトル",
+diff --git a/packages/app/src/i18n/resources/ko.ts b/packages/app/src/i18n/resources/ko.ts
+index 63fce05bd..3996d43f6 100644
+--- a/packages/app/src/i18n/resources/ko.ts
++++ b/packages/app/src/i18n/resources/ko.ts
+@@ -1174,6 +1174,8 @@ export const ko: TranslationResources = {
+         threeHours: "최근 3시간 내 완료",
+         twelveHours: "최근 12시간 내 완료",
+         today: "오늘 완료",
++        twentyFourHours: "최근 24시간 내 완료",
++        fortyEightHours: "최근 48시간 내 완료",
+       },
+       earlier: {
+         title: "이전",
+@@ -1204,6 +1206,8 @@ export const ko: TranslationResources = {
+         threeHours: "3시간",
+         twelveHours: "12시간",
+         today: "오늘",
++        twentyFourHours: "24시간",
++        fortyEightHours: "48시간",
+       },
+       titleSource: {
+         label: "제목",
+diff --git a/packages/app/src/i18n/resources/pt-BR.ts b/packages/app/src/i18n/resources/pt-BR.ts
+index 3ad546280..1f59b203a 100644
+--- a/packages/app/src/i18n/resources/pt-BR.ts
++++ b/packages/app/src/i18n/resources/pt-BR.ts
+@@ -1193,6 +1193,8 @@ export const ptBR: TranslationResources = {
+         threeHours: "Concluído nas últimas 3 horas",
+         twelveHours: "Concluído nas últimas 12 horas",
+         today: "Concluído hoje",
++        twentyFourHours: "Concluído nas últimas 24 horas",
++        fortyEightHours: "Concluído nas últimas 48 horas",
+       },
+       earlier: {
+         title: "Anteriores",
+@@ -1223,6 +1225,8 @@ export const ptBR: TranslationResources = {
+         threeHours: "3 horas",
+         twelveHours: "12 horas",
+         today: "Hoje",
++        twentyFourHours: "24 horas",
++        fortyEightHours: "48 horas",
+       },
+       titleSource: {
+         label: "Título",
+diff --git a/packages/app/src/i18n/resources/ru.ts b/packages/app/src/i18n/resources/ru.ts
+index 8fb7828bd..def4195f4 100644
+--- a/packages/app/src/i18n/resources/ru.ts
++++ b/packages/app/src/i18n/resources/ru.ts
+@@ -1184,6 +1184,8 @@ export const ru: TranslationResources = {
+         threeHours: "Готово за последние 3 часа",
+         twelveHours: "Готово за последние 12 часов",
+         today: "Готово сегодня",
++        twentyFourHours: "Готово за последние 24 часа",
++        fortyEightHours: "Готово за последние 48 часов",
+       },
+       earlier: {
+         title: "Ранее",
+@@ -1214,6 +1216,8 @@ export const ru: TranslationResources = {
+         threeHours: "3 часа",
+         twelveHours: "12 часов",
+         today: "Сегодня",
++        twentyFourHours: "24 часа",
++        fortyEightHours: "48 часов",
+       },
+       titleSource: {
+         label: "Заголовок",
+diff --git a/packages/app/src/i18n/resources/zh-CN.ts b/packages/app/src/i18n/resources/zh-CN.ts
+index 2d49898be..18ff5a2e4 100644
+--- a/packages/app/src/i18n/resources/zh-CN.ts
++++ b/packages/app/src/i18n/resources/zh-CN.ts
+@@ -1159,6 +1159,8 @@ export const zhCN: TranslationResources = {
+         threeHours: "最近 3 小时完成",
+         twelveHours: "最近 12 小时完成",
+         today: "今天完成",
++        twentyFourHours: "最近 24 小时完成",
++        fortyEightHours: "最近 48 小时完成",
+       },
+       earlier: {
+         title: "更早",
+@@ -1189,6 +1191,8 @@ export const zhCN: TranslationResources = {
+         threeHours: "3 小时",
+         twelveHours: "12 小时",
+         today: "今天",
++        twentyFourHours: "24 小时",
++        fortyEightHours: "48 小时",
+       },
+       titleSource: {
+         label: "标题",
+diff --git a/packages/app/src/stores/sidebar-view-store.test.ts b/packages/app/src/stores/sidebar-view-store.test.ts
+index 72fc9de52..2ea904992 100644
+--- a/packages/app/src/stores/sidebar-view-store.test.ts
++++ b/packages/app/src/stores/sidebar-view-store.test.ts
+@@ -111,6 +111,15 @@ describe("sidebar view store", () => {
+     });
+   });
+ 
++  it("keeps the 24 and 48 hour completion windows", () => {
++    for (const activityWindow of ["24h", "48h"] as const) {
++      expect(migrateSidebarViewState({ groupMode: "activity", activityWindow })).toMatchObject({
++        groupMode: "activity",
++        activityWindow,
++      });
++    }
++  });
++
+   it("defaults the completion window to today for state saved before it existed", () => {
+     expect(migrateSidebarViewState({ groupMode: "status" })).toMatchObject({
+       groupMode: "status",
+diff --git a/packages/app/src/stores/sidebar-view-store.ts b/packages/app/src/stores/sidebar-view-store.ts
+index a996f7194..85d76a8a7 100644
+--- a/packages/app/src/stores/sidebar-view-store.ts
++++ b/packages/app/src/stores/sidebar-view-store.ts
+@@ -9,8 +9,14 @@ import { createValidatedPersistStorage } from "@/storage/validated-persist-stora
+ export type SidebarGroupMode = "project" | "status" | "activity";
+ 
+ /** How recently a workspace must have finished to stay under Done in activity grouping. */
+-export type SidebarActivityWindow = "3h" | "12h" | "today";
+-export const SIDEBAR_ACTIVITY_WINDOWS: readonly SidebarActivityWindow[] = ["3h", "12h", "today"];
++export type SidebarActivityWindow = "3h" | "12h" | "today" | "24h" | "48h";
++export const SIDEBAR_ACTIVITY_WINDOWS: readonly SidebarActivityWindow[] = [
++  "3h",
++  "12h",
++  "today",
++  "24h",
++  "48h",
++];
+ 
+ const SIDEBAR_VIEW_STORAGE_KEY = "sidebar-view";
+ const LEGACY_SIDEBAR_GROUP_MODE_STORAGE_KEY = "sidebar-group-mode";
+@@ -94,7 +100,7 @@ interface SidebarViewPersistedState {
+ }
+ 
+ const PersistedSidebarGroupModeSchema = z.enum(["project", "status", "activity", "label"]);
+-const SidebarActivityWindowSchema = z.enum(["3h", "12h", "today"]);
++const SidebarActivityWindowSchema = z.enum(["3h", "12h", "today", "24h", "48h"]);
+ const SidebarLabelFilterSchema = z.object({
+   labels: z.array(z.string()),
+ });
+-- 
+2.50.1 (Apple Git-155)
+
