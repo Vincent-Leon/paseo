@@ -1,0 +1,271 @@
+From 1540c120a36e27da1ded7da8e296036f6dab988a Mon Sep 17 00:00:00 2001
+From: Vincent Leon <leon@mbp.com>
+Date: Sun, 25 Oct 2026 10:17:08 +0800
+Subject: [PATCH] feat(harmony): a switch to keep a folded phone in portrait
+
+On a foldable, the HarmonyOS shell can hold the window in portrait while
+the screen is phone-sized, so a tilt no longer turns a folded phone
+sideways; unfolded it rotates as before. The shell owns the choice and
+applies it before the page loads. General settings shows it as
+"Keep portrait when folded", on foldables only, reading and changing it
+through the shell's rotation.status and rotation.set.
+
+Every other build gets the base module, which renders nothing.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ packages/app/src/i18n/resources/ar.ts         |  5 ++
+ packages/app/src/i18n/resources/en.ts         |  5 ++
+ packages/app/src/i18n/resources/es.ts         |  5 ++
+ packages/app/src/i18n/resources/fr.ts         |  5 ++
+ packages/app/src/i18n/resources/ja.ts         |  5 ++
+ packages/app/src/i18n/resources/ko.ts         |  5 ++
+ packages/app/src/i18n/resources/pt-BR.ts      |  5 ++
+ packages/app/src/i18n/resources/ru.ts         |  5 ++
+ packages/app/src/i18n/resources/zh-CN.ts      |  5 ++
+ packages/app/src/screens/settings-screen.tsx  |  2 +
+ .../general/fold-rotation-section.harmony.tsx | 53 +++++++++++++++++++
+ .../general/fold-rotation-section.tsx         |  7 +++
+ 12 files changed, 107 insertions(+)
+ create mode 100644 packages/app/src/screens/settings/general/fold-rotation-section.harmony.tsx
+ create mode 100644 packages/app/src/screens/settings/general/fold-rotation-section.tsx
+
+diff --git a/packages/app/src/i18n/resources/ar.ts b/packages/app/src/i18n/resources/ar.ts
+index ea1de8824..d70d88f55 100644
+--- a/packages/app/src/i18n/resources/ar.ts
++++ b/packages/app/src/i18n/resources/ar.ts
+@@ -2293,6 +2293,11 @@ export const ar: TranslationResources = {
+     general: {
+       title: "عام",
+       sending: "الإرسال",
++      foldRotation: {
++        title: "الشاشة",
++        label: "الوضع الرأسي عند الطي",
++        hint: "عند طي الهاتف لا تتحول الشاشة إلى الوضع الأفقي عند إمالته، وعند فتحه تدور كالمعتاد.",
++      },
+       browserData: {
+         title: "بيانات المتصفح",
+         siteData: "ملفات تعريف الارتباط وبيانات المواقع",
+diff --git a/packages/app/src/i18n/resources/en.ts b/packages/app/src/i18n/resources/en.ts
+index e52b2ccb2..32df432fe 100644
+--- a/packages/app/src/i18n/resources/en.ts
++++ b/packages/app/src/i18n/resources/en.ts
+@@ -2382,6 +2382,11 @@ export const en = {
+     general: {
+       title: "General",
+       sending: "Sending",
++      foldRotation: {
++        title: "Screen",
++        label: "Keep portrait when folded",
++        hint: "Folded, the phone stays upright instead of turning sideways at a tilt. Unfolded, it rotates as usual.",
++      },
+       browserData: {
+         title: "Browser data",
+         siteData: "Cookies and site data",
+diff --git a/packages/app/src/i18n/resources/es.ts b/packages/app/src/i18n/resources/es.ts
+index 8c9ebfcf9..1696e437e 100644
+--- a/packages/app/src/i18n/resources/es.ts
++++ b/packages/app/src/i18n/resources/es.ts
+@@ -2305,6 +2305,11 @@ export const es: TranslationResources = {
+     general: {
+       title: "General",
+       sending: "Envío",
++      foldRotation: {
++        title: "Pantalla",
++        label: "Mantener vertical al plegar",
++        hint: "Plegado, el teléfono no gira a horizontal al inclinarlo. Desplegado, gira como siempre.",
++      },
+       browserData: {
+         title: "Datos del navegador",
+         siteData: "Cookies y datos de sitios",
+diff --git a/packages/app/src/i18n/resources/fr.ts b/packages/app/src/i18n/resources/fr.ts
+index 728e88d9d..89012cc10 100644
+--- a/packages/app/src/i18n/resources/fr.ts
++++ b/packages/app/src/i18n/resources/fr.ts
+@@ -2305,6 +2305,11 @@ export const fr: TranslationResources = {
+     general: {
+       title: "Général",
+       sending: "Envoi",
++      foldRotation: {
++        title: "Écran",
++        label: "Rester en portrait une fois plié",
++        hint: "Plié, le téléphone ne bascule plus en paysage quand on l’incline. Déplié, il pivote comme d’habitude.",
++      },
+       browserData: {
+         title: "Données du navigateur",
+         siteData: "Cookies et données des sites",
+diff --git a/packages/app/src/i18n/resources/ja.ts b/packages/app/src/i18n/resources/ja.ts
+index 4dbebb3ae..af8a3845e 100644
+--- a/packages/app/src/i18n/resources/ja.ts
++++ b/packages/app/src/i18n/resources/ja.ts
+@@ -2278,6 +2278,11 @@ export const ja: TranslationResources = {
+     general: {
+       title: "一般",
+       sending: "送信",
++      foldRotation: {
++        title: "画面",
++        label: "折りたたみ時は縦向きに固定",
++        hint: "折りたたんだ状態では、傾けても横向きになりません。開くと通常どおり回転します。",
++      },
+       browserData: {
+         title: "ブラウザーデータ",
+         siteData: "Cookie とサイトデータ",
+diff --git a/packages/app/src/i18n/resources/ko.ts b/packages/app/src/i18n/resources/ko.ts
+index 3996d43f6..40692bfdf 100644
+--- a/packages/app/src/i18n/resources/ko.ts
++++ b/packages/app/src/i18n/resources/ko.ts
+@@ -2267,6 +2267,11 @@ export const ko: TranslationResources = {
+     general: {
+       title: "일반",
+       sending: "전송",
++      foldRotation: {
++        title: "화면",
++        label: "접었을 때 세로 고정",
++        hint: "접은 상태에서는 기울여도 가로로 바뀌지 않습니다. 펼치면 평소처럼 회전합니다.",
++      },
+       browserData: {
+         title: "브라우저 데이터",
+         siteData: "쿠키 및 사이트 데이터",
+diff --git a/packages/app/src/i18n/resources/pt-BR.ts b/packages/app/src/i18n/resources/pt-BR.ts
+index 1f59b203a..b62d26bde 100644
+--- a/packages/app/src/i18n/resources/pt-BR.ts
++++ b/packages/app/src/i18n/resources/pt-BR.ts
+@@ -2290,6 +2290,11 @@ export const ptBR: TranslationResources = {
+     general: {
+       title: "Geral",
+       sending: "Envio",
++      foldRotation: {
++        title: "Tela",
++        label: "Manter retrato quando dobrado",
++        hint: "Dobrado, o celular não vira para paisagem ao inclinar. Desdobrado, gira normalmente.",
++      },
+       browserData: {
+         title: "Dados do navegador",
+         siteData: "Cookies e dados de sites",
+diff --git a/packages/app/src/i18n/resources/ru.ts b/packages/app/src/i18n/resources/ru.ts
+index def4195f4..71a2e7a58 100644
+--- a/packages/app/src/i18n/resources/ru.ts
++++ b/packages/app/src/i18n/resources/ru.ts
+@@ -2291,6 +2291,11 @@ export const ru: TranslationResources = {
+     general: {
+       title: "Основные",
+       sending: "Отправка",
++      foldRotation: {
++        title: "Экран",
++        label: "Книжная ориентация в сложенном виде",
++        hint: "Сложенный телефон не переходит в альбомную ориентацию при наклоне. В разложенном виде экран поворачивается как обычно.",
++      },
+       browserData: {
+         title: "Данные браузера",
+         siteData: "Файлы cookie и данные сайтов",
+diff --git a/packages/app/src/i18n/resources/zh-CN.ts b/packages/app/src/i18n/resources/zh-CN.ts
+index 18ff5a2e4..a6940127f 100644
+--- a/packages/app/src/i18n/resources/zh-CN.ts
++++ b/packages/app/src/i18n/resources/zh-CN.ts
+@@ -2234,6 +2234,11 @@ export const zhCN: TranslationResources = {
+     general: {
+       title: "通用",
+       sending: "发送",
++      foldRotation: {
++        title: "屏幕",
++        label: "折叠时保持竖屏",
++        hint: "手机折叠时，倾斜不会让屏幕转成横屏；展开后照常旋转。",
++      },
+       browserData: {
+         title: "浏览器数据",
+         siteData: "Cookie 和网站数据",
+diff --git a/packages/app/src/screens/settings-screen.tsx b/packages/app/src/screens/settings-screen.tsx
+index b90f5ccd2..f720c959a 100644
+--- a/packages/app/src/screens/settings-screen.tsx
++++ b/packages/app/src/screens/settings-screen.tsx
+@@ -55,6 +55,7 @@ import { TerminalSection } from "@/screens/settings/terminal/terminal-section";
+ import { ChatSection } from "@/screens/settings/chat/chat-section";
+ import { SidebarNavSection } from "@/screens/settings/sidebar/sidebar-nav-section";
+ import { SendingSection } from "@/screens/settings/general/sending-section";
++import { FoldRotationSection } from "@/screens/settings/general/fold-rotation-section";
+ import {
+   useAppSettings,
+   useSettings,
+@@ -1352,6 +1353,7 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
+             <>
+               <GeneralSection settings={settings} handleLanguageChange={handleLanguageChange} />
+               <SendingSection />
++              <FoldRotationSection />
+               {isDesktopApp ? <OpenLocationSection /> : null}
+             </>
+           );
+diff --git a/packages/app/src/screens/settings/general/fold-rotation-section.harmony.tsx b/packages/app/src/screens/settings/general/fold-rotation-section.harmony.tsx
+new file mode 100644
+index 000000000..1fb762a57
+--- /dev/null
++++ b/packages/app/src/screens/settings/general/fold-rotation-section.harmony.tsx
+@@ -0,0 +1,53 @@
++import { useMutation, useQueryClient } from "@tanstack/react-query";
++import { useCallback } from "react";
++import { useTranslation } from "react-i18next";
++import { SettingsCard, SettingsSection, SettingsSwitch } from "@/components/settings";
++import { useFetchQuery } from "@/data/query";
++import { harmonyHost } from "@/harmony/host";
++import { assertCoversExports } from "@/harmony/variant";
++import type * as Base from "./fold-rotation-section";
++
++/** What the shell's `rotation.status` and `rotation.set` answer. */
++interface RotationStatus {
++  foldable: boolean;
++  folded: boolean;
++  lockWhenFolded: boolean;
++}
++
++const ROTATION_QUERY_KEY = ["harmony", "rotation"] as const;
++
++// The shell owns the choice and applies it before the page loads; this shows and changes it.
++export function FoldRotationSection() {
++  const { t } = useTranslation();
++  const queryClient = useQueryClient();
++  const { data: status } = useFetchQuery({
++    queryKey: ROTATION_QUERY_KEY,
++    queryFn: () => harmonyHost.request<RotationStatus>("rotation.status"),
++    dataShape: "value",
++    // Read afresh whenever the page opens; only this switch changes it otherwise.
++    staleTimeMs: 0,
++  });
++  const { mutate } = useMutation({
++    mutationFn: (lockWhenFolded: boolean) =>
++      harmonyHost.request<RotationStatus>("rotation.set", { lockWhenFolded }),
++    onSuccess: (next) => queryClient.setQueryData(ROTATION_QUERY_KEY, next),
++  });
++  const change = useCallback((lockWhenFolded: boolean) => mutate(lockWhenFolded), [mutate]);
++
++  if (!status?.foldable) return null;
++  return (
++    <SettingsSection title={t("settings.general.foldRotation.title")}>
++      <SettingsCard>
++        <SettingsSwitch
++          label={t("settings.general.foldRotation.label")}
++          hint={t("settings.general.foldRotation.hint")}
++          value={status.lockWhenFolded}
++          onValueChange={change}
++          testID="settings-fold-rotation"
++        />
++      </SettingsCard>
++    </SettingsSection>
++  );
++}
++
++assertCoversExports<typeof Base, typeof import("./fold-rotation-section.harmony")>();
+diff --git a/packages/app/src/screens/settings/general/fold-rotation-section.tsx b/packages/app/src/screens/settings/general/fold-rotation-section.tsx
+new file mode 100644
+index 000000000..5942dbd06
+--- /dev/null
++++ b/packages/app/src/screens/settings/general/fold-rotation-section.tsx
+@@ -0,0 +1,7 @@
++/**
++ * Whether a folded phone stays in portrait. Only the HarmonyOS shell can hold the window's
++ * orientation, so every other build renders nothing; see the `.harmony` variant.
++ */
++export function FoldRotationSection(): null {
++  return null;
++}
+-- 
+2.50.1 (Apple Git-155)
+
