@@ -1,8 +1,9 @@
 # Builds getpaseo/paseo's latest stable release with the patches in .fork/patches for
 # macOS arm64 and Windows x64, signs both with the fork certificate once a reviewer
 # approves the fork-release environment, and publishes them as this fork's latest release
-# so the patched desktop app updates from here. Design, security model and maintenance:
-# .fork/README.md.
+# so the patched desktop app updates from here. The same release carries the signed web
+# bundle the HarmonyOS app updates its web app from. Design, security model and
+# maintenance: .fork/README.md.
 name: Fork patched release
 
 on:
@@ -421,8 +422,87 @@ jobs:
 
   # Holds the write token and runs no upstream code: it only uploads the signed files.
   # The tag is created with GITHUB_TOKEN, so it starts no other workflow.
+  # The HarmonyOS app (paseo-harmony) downloads harmony-web.zip from the latest release and
+  # serves it only if harmony-web.json carries a signature from the key it pins
+  # (.fork/harmony-web-signing.pub) and the zip matches the manifest. This job holds that
+  # key, so like the other sign jobs it rebuilds from the tested tree instead of signing
+  # what the secret-less build job produced.
+  sign-harmony-web:
+    needs: [resolve, build]
+    if: github.repository == 'Vincent-Leon/paseo'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: fork-release
+    permissions:
+      contents: read
+    outputs:
+      started: ${{ steps.started.outputs.started }}
+    steps:
+      - name: Mark job started
+        id: started
+        run: echo "started=true" >> "$GITHUB_OUTPUT"
+
+      - name: Check out fork tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: fork
+          persist-credentials: false
+
+      - name: Check out upstream release
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: getpaseo/paseo
+          ref: refs/tags/${{ needs.resolve.outputs.tag }}
+          path: upstream
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+
+      - name: Apply fork patches
+        env:
+          TESTED_TREE: ${{ needs.build.outputs.tree }}
+        run: |
+          set -euo pipefail
+          tree="$(bash fork/.fork/prepare-source.sh upstream | sed -n 's/^tree: //p')"
+          if [ -z "$TESTED_TREE" ] || [ "$tree" != "$TESTED_TREE" ]; then
+            echo "::error::Patched tree $tree is not the tested tree '$TESTED_TREE'"
+            exit 1
+          fi
+
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+          package-manager-cache: false
+
+      - name: Install dependencies
+        working-directory: upstream
+        run: node scripts/npm-retry.mjs ci
+
+      - name: Build the web bundle
+        env:
+          TAG: ${{ needs.resolve.outputs.tag }}
+          TREE: ${{ needs.build.outputs.tree }}
+          NODE_OPTIONS: --max-old-space-size=4096
+        run: bash fork/.fork/build-harmony-web.sh upstream "$RUNNER_TEMP/harmony-web" "$TAG" "$TREE"
+
+      # The key exists only in this step's environment.
+      - name: Sign the manifest
+        env:
+          FORK_HARMONY_WEB_SIGNING_KEY: ${{ secrets.FORK_HARMONY_WEB_SIGNING_KEY }}
+        run: node fork/.fork/sign-harmony-web.mjs "$RUNNER_TEMP/harmony-web"
+
+      - name: Upload release files
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fork-release-harmony-web
+          path: ${{ runner.temp }}/harmony-web
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
   publish:
-    needs: [resolve, build, sign-macos, sign-windows]
+    needs: [resolve, build, sign-macos, sign-windows, sign-harmony-web]
     if: github.repository == 'Vincent-Leon/paseo' && needs.resolve.outputs.publish == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -450,6 +530,7 @@ jobs:
           files=(
             "$base.dmg" "$base.dmg.blockmap" "$base.zip" "$base.zip.blockmap" "latest-mac.yml"
             "$installer" "$installer.blockmap" "latest.yml"
+            "harmony-web.zip" "harmony-web.json" "harmony-web.json.sig"
           )
           cd release
           for file in "${files[@]}"; do
@@ -463,10 +544,12 @@ jobs:
           for manifest in latest-mac.yml latest.yml; do
             grep -qx "version: $VERSION" "$manifest" || { echo "::error::$manifest is not $VERSION"; exit 1; }
           done
+          # The shell fetches the zip from download/<tag>/, so the manifest must name this release.
+          node -e 'const m = JSON.parse(require("fs").readFileSync("harmony-web.json", "utf8")); if (m.tag !== process.argv[1]) { console.error(`harmony-web.json names ${m.tag}`); process.exit(1); }' "$TAG"
 
           notes="$RUNNER_TEMP/notes.md"
           {
-            echo "Patched build of [getpaseo/paseo $TAG](https://github.com/$UPSTREAM_REPOSITORY/releases/tag/$TAG) for macOS arm64 and Windows x64."
+            echo "Patched build of [getpaseo/paseo $TAG](https://github.com/$UPSTREAM_REPOSITORY/releases/tag/$TAG) for macOS arm64 and Windows x64, with the signed web bundle the HarmonyOS app updates from (\`harmony-web.*\`)."
             echo
             echo "Self-signed with the fork certificate and not notarized; see .fork/README.md on the default branch."
             echo
@@ -515,7 +598,7 @@ jobs:
   # closes it once that tag is published. A rejected approval is a decision, not a
   # failure, and reports nothing.
   report:
-    needs: [resolve, build, sign-macos, sign-windows, publish]
+    needs: [resolve, build, sign-macos, sign-windows, sign-harmony-web, publish]
     if: always() && github.repository == 'Vincent-Leon/paseo' && needs.resolve.outputs.build == 'true' && needs.resolve.outputs.publish == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -531,6 +614,8 @@ jobs:
           SIGN_MACOS_STARTED: ${{ needs.sign-macos.outputs.started }}
           SIGN_WINDOWS_RESULT: ${{ needs.sign-windows.result }}
           SIGN_WINDOWS_STARTED: ${{ needs.sign-windows.outputs.started }}
+          SIGN_HARMONY_WEB_RESULT: ${{ needs.sign-harmony-web.result }}
+          SIGN_HARMONY_WEB_STARTED: ${{ needs.sign-harmony-web.outputs.started }}
           PUBLISH_RESULT: ${{ needs.publish.result }}
           BUILD_STAGE: ${{ needs.build.outputs.stage }}
           PATCH_LOG: ${{ needs.build.outputs.log }}
@@ -548,6 +633,8 @@ jobs:
             stage="building, signing or verifying the macOS app failed"
           elif [ "$SIGN_WINDOWS_RESULT" = "failure" ] && [ "$SIGN_WINDOWS_STARTED" = "true" ]; then
             stage="building, signing or verifying the Windows app failed"
+          elif [ "$SIGN_HARMONY_WEB_RESULT" = "failure" ] && [ "$SIGN_HARMONY_WEB_STARTED" = "true" ]; then
+            stage="building or signing the HarmonyOS web bundle failed"
           elif [ "$PUBLISH_RESULT" = "failure" ]; then
             stage="publishing the release failed"
           fi
