@@ -1,6 +1,6 @@
 # Fork patched release
 
-This fork (`Vincent-Leon/paseo`) republishes each stable release of `getpaseo/paseo` for macOS arm64 and Windows x64 with a small set of local patches. The patched desktop app updates from this fork's GitHub releases instead of upstream's.
+This fork (`Vincent-Leon/paseo`) republishes each stable release of `getpaseo/paseo` for macOS arm64 and Windows x64 with a small set of local patches. The patched desktop app updates from this fork's GitHub releases instead of upstream's, and so does the web app inside the HarmonyOS app.
 
 | Path                                         | Purpose                                                                         |
 | -------------------------------------------- | ------------------------------------------------------------------------------- |
@@ -14,6 +14,10 @@ This fork (`Vincent-Leon/paseo`) republishes each stable release of `getpaseo/pa
 | `.fork/mac-sign.cjs`                         | electron-builder `mac.sign` hook                                                |
 | `.fork/build-desktop.sh`                     | Builds, signs and verifies the dmg, zip, blockmaps and `latest-mac.yml`         |
 | `.fork/build-desktop-windows.sh`             | Builds, signs and verifies the Windows installer, its blockmap and `latest.yml` |
+| `.fork/build-harmony-web.sh`                 | Builds the HarmonyOS web bundle, `harmony-web.zip` and its unsigned manifest    |
+| `.fork/sign-harmony-web.mjs`                 | Signs the manifest; fails unless the key is the one in `harmony-web-signing.pub` |
+| `.fork/harmony-web-signing.pub`              | Public half of the web bundle key. Pins which key may sign, like the certificate |
+| `.fork/harmony-shell-api`                    | The HarmonyOS shell API level the patched web app needs                         |
 
 ## How a release flows
 
@@ -21,8 +25,8 @@ Every three hours, and on manual dispatch, the workflow runs these jobs:
 
 1. **resolve** reads `repos/getpaseo/paseo/releases/latest`. It accepts only a `vX.Y.Z` tag that is a published, non-prerelease upstream release. It stops if this fork already has a release with that tag, or if the tag is listed in the `FORK_SKIP_TAGS` repository variable. A build-only dispatch (`publish` off) skips both checks and also accepts a published upstream prerelease.
 2. **build** checks out the upstream tag, applies the patches, installs dependencies and runs the tests in `tests.txt`. It has no secrets and a read-only token.
-3. **sign-macos** and **sign-windows** wait for a reviewer to approve the `fork-release` environment; one approval covers both. Each rebuilds the same source tree, verified by tree hash, then signs the app, launches it once against an isolated daemon (packaged smoke test) and verifies the output.
-4. **publish** uploads the eight files to a release with the upstream tag name and marks it latest. It runs no upstream code, and a build-only run skips it.
+3. **sign-macos**, **sign-windows** and **sign-harmony-web** wait for a reviewer to approve the `fork-release` environment; one approval covers all three. Each rebuilds the same source tree, verified by tree hash. The desktop jobs sign the app, launch it once against an isolated daemon (packaged smoke test) and verify the output. **sign-harmony-web** builds the web app for the HarmonyOS shell, zips it and signs a manifest naming the zip's size and SHA-256.
+4. **publish** uploads the eleven files to a release with the upstream tag name and marks it latest. It runs no upstream code, and a build-only run skips it.
 5. **report** opens or updates an issue named `Patched release blocked: vX.Y.Z` when a run fails, and closes it after that tag publishes.
 
 The release tag is created with `GITHUB_TOKEN`. GitHub does not start workflows for events caused by that token, so the new `v*` tag cannot trigger upstream's tag-driven workflows (desktop, Android, Docker, app deploy) in this fork.
@@ -38,7 +42,7 @@ gh run download <run-id> -R Vincent-Leon/paseo -n fork-release-windows -n fork-r
 
 The Windows build runs on a Windows runner because `npm ci` installs only the host's platform packages: a Windows installer packaged on a Mac lacks the Windows builds of sharp, sherpa-onnx and msgpackr-extract.
 
-Versions are upstream's, unchanged. The updater has `allowDowngrade=false` and installs only a strictly newer version. If you republish an existing version (`force` on dispatch), installed apps do not update. Install that build by hand from the release.
+Versions are upstream's, unchanged. The updater has `allowDowngrade=false` and installs only a strictly newer version. If you republish an existing version (`force` on dispatch), installed desktop apps do not update. Install that build by hand from the release. The HarmonyOS app orders web bundles by build time instead, so a republish reaches it.
 
 ## Signing
 
@@ -67,6 +71,7 @@ Without it the app downloads updates and refuses to install them. SmartScreen st
 Publishing a release here is equivalent to running code on every machine that has the patched app installed. Two things are required to ship an update: a release in this repository, and a signature from the pinned key. The pipeline separates them:
 
 - The key exists only as `fork-release` environment secrets (`FORK_SIGNING_P12_BASE64`, `FORK_SIGNING_P12_PASSWORD`). Only the sign job can read them, and only after a required reviewer approves the run. Restrict the environment to the default branch so a workflow on another branch cannot use it.
+- The web bundle key is the same kind of secret, `FORK_HARMONY_WEB_SIGNING_KEY` (an Ed25519 private key in PEM), present only in sign-harmony-web's signing step. The HarmonyOS shell pins its public half and serves a downloaded bundle only when the manifest's signature verifies and the zip matches the manifest, so GitHub and the network are not trusted with it. A signed bundle runs in the HarmonyOS app on every device that has it.
 - The sign job's token is read-only. The job that can write releases runs no upstream code.
 - The key is imported non-extractable, into a keychain on macOS and into the user certificate store on Windows, and both are removed at the end of the job. The secret is present only in the import step's environment.
 - Every job has explicit permissions under a top-level `permissions: {}`. Third-party actions are pinned to full commit SHAs. No job uses a dependency cache, so a lower-trust job cannot poison what the sign job installs.
@@ -76,7 +81,7 @@ Remaining risks:
 
 - **Upstream and its dependencies are trusted.** The sign job runs upstream's build with the key usable in the same session. A compromised upstream release or npm dependency could sign other code during that job. Hosted runners give jobs passwordless sudo, so non-extractable import raises the bar for stealing the key but does not rule it out. If you suspect a leak, rotate the key: generate a new certificate, replace `signing-cert.crt` and the secrets, and reinstall by hand (the DR changes, so updates across the rotation fail).
 - **Your GitHub account is the root of trust.** Anyone who controls it can edit the workflow, approve the environment and publish. Use two-factor authentication. Protect the default branch: require a pull request, block force pushes and deletion, and include administrators.
-- **The local copy of the key** in `~/.paseo/fork-signing/` can sign updates for this machine. Keep that directory private. Keep an offline backup of `signing.p12` and its password.
+- **The local copy of the key** in `~/.paseo/fork-signing/` can sign updates for this machine, and `harmony-web-ed25519.pem` there can sign web bundles for every HarmonyOS device. Keep that directory private. Keep an offline backup of `signing.p12`, its password and the web bundle key. Rotating the web bundle key means a new `harmony-web-signing.pub`, a new pinned key in the shell (paseo-harmony, `BundleUpdater.ets`) and the shell installed again by hand on every device.
 - **Library validation is off** for the fork build. Hardened runtime still blocks `DYLD_*` injection and debugger attachment.
 - **No staged rollout.** A fork release reaches the app on its next update check.
 - **Trusting the certificate on Windows trusts the key.** Anything signed with it runs as a trusted publisher on that PC, not only Paseo. Remove both entries when you stop using the fork build.
@@ -148,6 +153,8 @@ npm 11 skips dependency install scripts that are not listed in `allowScripts`. I
 Do not set `PASEO_DESKTOP_SMOKE=1` on a machine where Paseo is running. The smoke test launches the packaged app.
 
 The HarmonyOS app is built outside this workflow. Its HAP has to be signed with a developer's own AppGallery Connect profile, so it is built on that developer's machine: prepare a checkout as above, run `npm ci` in it, and hand it to `scripts/sync-web.sh` in the paseo-harmony project, which builds the web app with `PASEO_WEB_PLATFORM=harmony` (patch 0007).
+
+After that the app takes new web apps from the release, so only a change to the shell itself needs the HAP installed again. A bundle states the shell API level it needs, from `harmony-shell-api`, and a shell below it keeps the bundle it has. When a patch makes the web app use something new in the shell (a request, an event, a payload field), raise `SHELL_API` in paseo-harmony's `Bridge.ets` and `harmony-shell-api` here together, and install the new shell before publishing.
 
 ## Switching back to official updates
 
