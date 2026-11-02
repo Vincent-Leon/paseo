@@ -1,7 +1,7 @@
-From c80fe91a743966769b7836c49b5c04af9da95e3f Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Vincent Leon <leon@mbp.com>
 Date: Sat, 24 Oct 2026 21:54:08 +0800
-Subject: [PATCH 11/11] feat(harmony): drop daemon connections while the app is
+Subject: [PATCH 11/14] feat(harmony): drop daemon connections while the app is
  in the background
 
 HarmonyOS freezes a backgrounded app within seconds and its sockets go
@@ -14,8 +14,6 @@ first moment, and resumes them when it returns.
 DaemonClient gains suspend() and resume(): the connection drops through the
 same path a failed liveness check takes, subscriptions and state survive,
 and nothing reconnects until resume(), which reconnects at once.
-
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 ---
  .../app/src/harmony/host-sync.harmony.tsx     | 55 ++++++++++---------
  .../app/src/utils/os-notifications.harmony.ts |  6 +-
@@ -116,7 +114,7 @@ index 65690d168..3c94c76c2 100644
  export const sendOsNotification: typeof Base.sendOsNotification = (payload) =>
    presentHarmonyNotification(payload);
 diff --git a/packages/client/src/daemon-client.test.ts b/packages/client/src/daemon-client.test.ts
-index f663aeb8b..9f7e4764f 100644
+index 2a3b409ce..e493b79c2 100644
 --- a/packages/client/src/daemon-client.test.ts
 +++ b/packages/client/src/daemon-client.test.ts
 @@ -1347,6 +1347,49 @@ test("ensureConnected reconnects immediately without leaving the scheduled retry
@@ -170,10 +168,10 @@ index f663aeb8b..9f7e4764f 100644
    useHeartbeatClock();
    try {
 diff --git a/packages/client/src/daemon-client.ts b/packages/client/src/daemon-client.ts
-index e637936b4..56fb90523 100644
+index 0b4cbc864..437d8ba64 100644
 --- a/packages/client/src/daemon-client.ts
 +++ b/packages/client/src/daemon-client.ts
-@@ -1328,6 +1328,8 @@ export class DaemonClient {
+@@ -1331,6 +1331,8 @@ export class DaemonClient {
    private reconnectAttempt = 0;
    private traceConnectionAttempt = 0;
    private shouldReconnect = true;
@@ -182,7 +180,7 @@ index e637936b4..56fb90523 100644
    private connectPromise: Promise<void> | null = null;
    private connectResolve: (() => void) | null = null;
    private connectReject: ((error: Error) => void) | null = null;
-@@ -1675,7 +1677,7 @@ export class DaemonClient {
+@@ -1678,7 +1680,7 @@ export class DaemonClient {
    }
  
    ensureConnected(options?: { verify?: boolean }): void {
@@ -191,7 +189,7 @@ index e637936b4..56fb90523 100644
        return;
      }
      if (!this.shouldReconnect) {
-@@ -1695,6 +1697,34 @@ export class DaemonClient {
+@@ -1698,6 +1700,34 @@ export class DaemonClient {
      );
    }
  
@@ -226,6 +224,3 @@ index e637936b4..56fb90523 100644
    private verifyConnection(): void {
      const transport = this.transport;
      if (!transport || this.connectionVerification === transport) return;
--- 
-2.50.1 (Apple Git-155)
-

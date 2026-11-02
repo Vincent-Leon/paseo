@@ -1,7 +1,7 @@
-From 0270f4fa6c33468f7e2dcee728b334c948e03f87 Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Vincent Leon <leon@mbp.com>
 Date: Sat, 22 Aug 2026 12:41:29 +0800
-Subject: [PATCH 09/11] Let a push registration carry provider-defined metadata
+Subject: [PATCH 09/14] Let a push registration carry provider-defined metadata
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
@@ -26,8 +26,6 @@ UnifiedPush subscription would lose its keys within a minute of being made.
 
 On disk the metadata rides inside each entry, so an older daemon reading the
 same PASEO_HOME still ignores the whole `providers` block as before.
-
-Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 ---
  packages/protocol/src/messages.ts             |   5 +
  packages/server/src/server/push/index.ts      |  26 ++--
@@ -39,10 +37,10 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
  7 files changed, 217 insertions(+), 61 deletions(-)
 
 diff --git a/packages/protocol/src/messages.ts b/packages/protocol/src/messages.ts
-index 2ec86c9ac..43629ff12 100644
+index 6797b65d6..e9db51052 100644
 --- a/packages/protocol/src/messages.ts
 +++ b/packages/protocol/src/messages.ts
-@@ -2954,6 +2954,11 @@ export const RegisterPushTokenMessageSchema = z.object({
+@@ -2974,6 +2974,11 @@ export const RegisterPushTokenMessageSchema = z.object({
    // no client can still register a token without naming its delivery channel.
    // Absent means Expo, which is the only channel that existed before this field.
    provider: z.string().min(1).optional(),
@@ -566,10 +564,10 @@ index a4f23913c..a49bce94f 100644
    }));
  }
 diff --git a/packages/server/src/server/session.ts b/packages/server/src/server/session.ts
-index cf6ca8a6a..7252345b2 100644
+index 8293a2764..6669835c6 100644
 --- a/packages/server/src/server/session.ts
 +++ b/packages/server/src/server/session.ts
-@@ -3195,7 +3195,7 @@ export class Session {
+@@ -3212,7 +3212,7 @@ export class Session {
          await this.handleListCommandsRequest(msg);
          return;
        case "register_push_token":
@@ -578,7 +576,7 @@ index cf6ca8a6a..7252345b2 100644
          return;
        case "push.unregister.request":
          {
-@@ -5026,11 +5026,15 @@ export class Session {
+@@ -5043,11 +5043,15 @@ export class Session {
    /**
     * Handle push token registration
     */
@@ -596,6 +594,3 @@ index cf6ca8a6a..7252345b2 100644
      this.sessionLogger.info({ provider: resolved }, "Registered push token");
    }
  
--- 
-2.50.1 (Apple Git-155)
-

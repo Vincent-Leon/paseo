@@ -1,7 +1,8 @@
-From 1540c120a36e27da1ded7da8e296036f6dab988a Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Vincent Leon <leon@mbp.com>
 Date: Sun, 25 Oct 2026 10:17:08 +0800
-Subject: [PATCH] feat(harmony): a switch to keep a folded phone in portrait
+Subject: [PATCH 14/14] feat(harmony): a switch to keep a folded phone in
+ portrait
 
 On a foldable, the HarmonyOS shell can hold the window in portrait while
 the screen is phone-sized, so a tilt no longer turns a folded phone
@@ -11,8 +12,6 @@ applies it before the page loads. General settings shows it as
 through the shell's rotation.status and rotation.set.
 
 Every other build gets the base module, which renders nothing.
-
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 ---
  packages/app/src/i18n/resources/ar.ts         |  5 ++
  packages/app/src/i18n/resources/en.ts         |  5 ++
@@ -31,10 +30,10 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
  create mode 100644 packages/app/src/screens/settings/general/fold-rotation-section.tsx
 
 diff --git a/packages/app/src/i18n/resources/ar.ts b/packages/app/src/i18n/resources/ar.ts
-index ea1de8824..d70d88f55 100644
+index ba1bf7357..9d1dd24fd 100644
 --- a/packages/app/src/i18n/resources/ar.ts
 +++ b/packages/app/src/i18n/resources/ar.ts
-@@ -2293,6 +2293,11 @@ export const ar: TranslationResources = {
+@@ -2373,6 +2373,11 @@ export const ar: TranslationResources = {
      general: {
        title: "عام",
        sending: "الإرسال",
@@ -47,10 +46,10 @@ index ea1de8824..d70d88f55 100644
          title: "بيانات المتصفح",
          siteData: "ملفات تعريف الارتباط وبيانات المواقع",
 diff --git a/packages/app/src/i18n/resources/en.ts b/packages/app/src/i18n/resources/en.ts
-index e52b2ccb2..32df432fe 100644
+index 5f3ae8367..6f889cc3f 100644
 --- a/packages/app/src/i18n/resources/en.ts
 +++ b/packages/app/src/i18n/resources/en.ts
-@@ -2382,6 +2382,11 @@ export const en = {
+@@ -2462,6 +2462,11 @@ export const en = {
      general: {
        title: "General",
        sending: "Sending",
@@ -63,10 +62,10 @@ index e52b2ccb2..32df432fe 100644
          title: "Browser data",
          siteData: "Cookies and site data",
 diff --git a/packages/app/src/i18n/resources/es.ts b/packages/app/src/i18n/resources/es.ts
-index 8c9ebfcf9..1696e437e 100644
+index 41972758f..63b8146bc 100644
 --- a/packages/app/src/i18n/resources/es.ts
 +++ b/packages/app/src/i18n/resources/es.ts
-@@ -2305,6 +2305,11 @@ export const es: TranslationResources = {
+@@ -2385,6 +2385,11 @@ export const es: TranslationResources = {
      general: {
        title: "General",
        sending: "Envío",
@@ -79,10 +78,10 @@ index 8c9ebfcf9..1696e437e 100644
          title: "Datos del navegador",
          siteData: "Cookies y datos de sitios",
 diff --git a/packages/app/src/i18n/resources/fr.ts b/packages/app/src/i18n/resources/fr.ts
-index 728e88d9d..89012cc10 100644
+index ac62b5879..4e3ead7b6 100644
 --- a/packages/app/src/i18n/resources/fr.ts
 +++ b/packages/app/src/i18n/resources/fr.ts
-@@ -2305,6 +2305,11 @@ export const fr: TranslationResources = {
+@@ -2385,6 +2385,11 @@ export const fr: TranslationResources = {
      general: {
        title: "Général",
        sending: "Envoi",
@@ -95,10 +94,10 @@ index 728e88d9d..89012cc10 100644
          title: "Données du navigateur",
          siteData: "Cookies et données des sites",
 diff --git a/packages/app/src/i18n/resources/ja.ts b/packages/app/src/i18n/resources/ja.ts
-index 4dbebb3ae..af8a3845e 100644
+index b21e6a5c1..81c8c946d 100644
 --- a/packages/app/src/i18n/resources/ja.ts
 +++ b/packages/app/src/i18n/resources/ja.ts
-@@ -2278,6 +2278,11 @@ export const ja: TranslationResources = {
+@@ -2358,6 +2358,11 @@ export const ja: TranslationResources = {
      general: {
        title: "一般",
        sending: "送信",
@@ -111,10 +110,10 @@ index 4dbebb3ae..af8a3845e 100644
          title: "ブラウザーデータ",
          siteData: "Cookie とサイトデータ",
 diff --git a/packages/app/src/i18n/resources/ko.ts b/packages/app/src/i18n/resources/ko.ts
-index 3996d43f6..40692bfdf 100644
+index 3e06f9c74..61b2a0ee7 100644
 --- a/packages/app/src/i18n/resources/ko.ts
 +++ b/packages/app/src/i18n/resources/ko.ts
-@@ -2267,6 +2267,11 @@ export const ko: TranslationResources = {
+@@ -2347,6 +2347,11 @@ export const ko: TranslationResources = {
      general: {
        title: "일반",
        sending: "전송",
@@ -127,10 +126,10 @@ index 3996d43f6..40692bfdf 100644
          title: "브라우저 데이터",
          siteData: "쿠키 및 사이트 데이터",
 diff --git a/packages/app/src/i18n/resources/pt-BR.ts b/packages/app/src/i18n/resources/pt-BR.ts
-index 1f59b203a..b62d26bde 100644
+index 95e948913..1a8d29365 100644
 --- a/packages/app/src/i18n/resources/pt-BR.ts
 +++ b/packages/app/src/i18n/resources/pt-BR.ts
-@@ -2290,6 +2290,11 @@ export const ptBR: TranslationResources = {
+@@ -2370,6 +2370,11 @@ export const ptBR: TranslationResources = {
      general: {
        title: "Geral",
        sending: "Envio",
@@ -143,10 +142,10 @@ index 1f59b203a..b62d26bde 100644
          title: "Dados do navegador",
          siteData: "Cookies e dados de sites",
 diff --git a/packages/app/src/i18n/resources/ru.ts b/packages/app/src/i18n/resources/ru.ts
-index def4195f4..71a2e7a58 100644
+index ba642fb50..22de1f6f9 100644
 --- a/packages/app/src/i18n/resources/ru.ts
 +++ b/packages/app/src/i18n/resources/ru.ts
-@@ -2291,6 +2291,11 @@ export const ru: TranslationResources = {
+@@ -2372,6 +2372,11 @@ export const ru: TranslationResources = {
      general: {
        title: "Основные",
        sending: "Отправка",
@@ -159,10 +158,10 @@ index def4195f4..71a2e7a58 100644
          title: "Данные браузера",
          siteData: "Файлы cookie и данные сайтов",
 diff --git a/packages/app/src/i18n/resources/zh-CN.ts b/packages/app/src/i18n/resources/zh-CN.ts
-index 18ff5a2e4..a6940127f 100644
+index 98b91f360..f4511b820 100644
 --- a/packages/app/src/i18n/resources/zh-CN.ts
 +++ b/packages/app/src/i18n/resources/zh-CN.ts
-@@ -2234,6 +2234,11 @@ export const zhCN: TranslationResources = {
+@@ -2314,6 +2314,11 @@ export const zhCN: TranslationResources = {
      general: {
        title: "通用",
        sending: "发送",
@@ -175,10 +174,10 @@ index 18ff5a2e4..a6940127f 100644
          title: "浏览器数据",
          siteData: "Cookie 和网站数据",
 diff --git a/packages/app/src/screens/settings-screen.tsx b/packages/app/src/screens/settings-screen.tsx
-index b90f5ccd2..f720c959a 100644
+index 78425bf20..162ff5e7f 100644
 --- a/packages/app/src/screens/settings-screen.tsx
 +++ b/packages/app/src/screens/settings-screen.tsx
-@@ -55,6 +55,7 @@ import { TerminalSection } from "@/screens/settings/terminal/terminal-section";
+@@ -56,6 +56,7 @@ import { TerminalSection } from "@/screens/settings/terminal/terminal-section";
  import { ChatSection } from "@/screens/settings/chat/chat-section";
  import { SidebarNavSection } from "@/screens/settings/sidebar/sidebar-nav-section";
  import { SendingSection } from "@/screens/settings/general/sending-section";
@@ -186,7 +185,7 @@ index b90f5ccd2..f720c959a 100644
  import {
    useAppSettings,
    useSettings,
-@@ -1352,6 +1353,7 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
+@@ -1353,6 +1354,7 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
              <>
                <GeneralSection settings={settings} handleLanguageChange={handleLanguageChange} />
                <SendingSection />
@@ -266,6 +265,3 @@ index 000000000..5942dbd06
 +export function FoldRotationSection(): null {
 +  return null;
 +}
--- 
-2.50.1 (Apple Git-155)
-

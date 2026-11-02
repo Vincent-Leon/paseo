@@ -1,15 +1,13 @@
-From 5963b6024b94ab4b48883dd5009b671231c6548a Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Vincent Leon <leon@mbp.com>
 Date: Thu, 22 Oct 2026 22:57:29 +0800
-Subject: [PATCH 06/11] feat(android): let the app rotate with the device
+Subject: [PATCH 06/14] feat(android): let the app rotate with the device
 
 The app locks to portrait, which also locks an unfolded foldable or a
 tablet, including the Android build running under HarmonyOS's Android
 compatibility layer. The layout already switches to the wide form factor
 by width, so set the main activity to fullUser: it rotates with the
 device unless rotation lock is on. iOS keeps its configuration.
-
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 ---
  packages/app/app.config.js                    |  2 ++
  .../plugins/with-android-user-orientation.js  | 21 +++++++++++++++++++
@@ -63,6 +61,3 @@ index 000000000..d9ca3d518
 +}
 +
 +module.exports = withAndroidUserOrientation;
--- 
-2.50.1 (Apple Git-155)
-

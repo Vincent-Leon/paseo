@@ -1,7 +1,7 @@
-From 1cb6676c9ff21956c3d113b71cd1ce62ca8a7476 Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Vincent Leon <leon@mbp.com>
 Date: Wed, 21 Oct 2026 12:07:14 +0800
-Subject: [PATCH 01/11] fix(server): stop re-emitting Claude content blocks
+Subject: [PATCH 01/14] fix(server): stop re-emitting Claude content blocks
  that were already streamed
 
 The Claude Code SDK sends one assistant message per content block, all sharing
@@ -14,8 +14,6 @@ Merge absolute assistant text instead: a growing snapshot replaces the
 accumulated text, a block already present at the end is treated as streamed,
 and any other block is appended. The merged text always extends what was
 emitted, so the emitted counters never reset.
-
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 ---
  .../claude/agent.timeline-assembly.test.ts    | 321 ++++++++++++++++++
  .../server/agent/providers/claude/agent.ts    |  28 +-
@@ -350,10 +348,10 @@ index 000000000..281f380f1
 +  });
 +});
 diff --git a/packages/server/src/server/agent/providers/claude/agent.ts b/packages/server/src/server/agent/providers/claude/agent.ts
-index a00f504f1..0d7cdedb0 100644
+index 6516ff81b..902a45d4b 100644
 --- a/packages/server/src/server/agent/providers/claude/agent.ts
 +++ b/packages/server/src/server/agent/providers/claude/agent.ts
-@@ -1199,6 +1199,24 @@ interface TimelineMessageState {
+@@ -1201,6 +1201,24 @@ interface TimelineMessageState {
    stopped: boolean;
  }
  
@@ -378,7 +376,7 @@ index a00f504f1..0d7cdedb0 100644
  class TimelineAssembler {
    private readonly messages = new Map<string, TimelineMessageState>();
    private readonly finalizedMessageIds = new Set<string>();
-@@ -1333,16 +1351,10 @@ class TimelineAssembler {
+@@ -1335,16 +1353,10 @@ class TimelineAssembler {
        .join("");
  
      if (assistantText.length > 0) {
@@ -397,6 +395,3 @@ index a00f504f1..0d7cdedb0 100644
      }
      return this.emitNewContent(state);
    }
--- 
-2.50.1 (Apple Git-155)
-
