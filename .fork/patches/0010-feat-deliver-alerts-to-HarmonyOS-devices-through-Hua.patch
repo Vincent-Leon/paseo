@@ -1,7 +1,7 @@
-From fbc6016dfc870eab1b8e559814595d1a08ae75c8 Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Vincent Leon <leon@mbp.com>
 Date: Sat, 24 Oct 2026 17:50:11 +0800
-Subject: [PATCH 10/11] feat: deliver alerts to HarmonyOS devices through
+Subject: [PATCH 10/14] feat: deliver alerts to HarmonyOS devices through
  Huawei Push Kit
 
 A HarmonyOS device can only be reached while its app is not running through
@@ -19,8 +19,6 @@ Kit reports as invalid are revoked.
 The client can name a provider when it registers or revokes a token, and the
 HarmonyOS build registers its Push Kit token with every host that lists
 huawei in pushProviders.
-
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 ---
  .../src/push-notifications/index.harmony.ts   |  84 +++++
  packages/client/src/daemon-client.ts          |  20 +-
@@ -124,10 +122,10 @@ index 000000000..e997b8452
 +
 +assertCoversExports<typeof Base, typeof import("./index.harmony")>();
 diff --git a/packages/client/src/daemon-client.ts b/packages/client/src/daemon-client.ts
-index 524df5670..e637936b4 100644
+index 524c3e264..0b4cbc864 100644
 --- a/packages/client/src/daemon-client.ts
 +++ b/packages/client/src/daemon-client.ts
-@@ -2385,18 +2385,32 @@ export class DaemonClient {
+@@ -2388,18 +2388,32 @@ export class DaemonClient {
      });
    }
  
@@ -763,7 +761,7 @@ index 000000000..1cd8f0c7c
 +  }
 +}
 diff --git a/packages/server/src/server/websocket-server.ts b/packages/server/src/server/websocket-server.ts
-index be29fc0bf..f107eebb8 100644
+index 243a48632..65d93581e 100644
 --- a/packages/server/src/server/websocket-server.ts
 +++ b/packages/server/src/server/websocket-server.ts
 @@ -76,6 +76,7 @@ import {
@@ -784,6 +782,3 @@ index be29fc0bf..f107eebb8 100644
      });
      this.pushNotificationSender = pushNotificationSender ?? this.pushNotifications;
  
--- 
-2.50.1 (Apple Git-155)
-

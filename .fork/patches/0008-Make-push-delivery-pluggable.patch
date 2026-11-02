@@ -1,7 +1,7 @@
-From f17a60f96efbea6ee43cf184b260e70554ad485e Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Vincent Leon <leon@mbp.com>
 Date: Wed, 19 Aug 2026 09:34:41 +0800
-Subject: [PATCH 08/11] Make push delivery pluggable
+Subject: [PATCH 08/14] Make push delivery pluggable
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
@@ -41,8 +41,6 @@ One thing to note for future interface changes: the push mock in
 websocket-server.relay-reconnect.test.ts is a vi.mock factory literal, which
 TypeScript does not check against PushNotifications. Adding a method to the
 interface broke it at runtime with no compile error. It is typed now.
-
-Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 ---
  packages/protocol/src/messages.ts             |  11 ++
  packages/server/src/server/push/index.ts      |  86 +++++++--
@@ -62,10 +60,10 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
  delete mode 100644 packages/server/src/server/push/push-service.ts
 
 diff --git a/packages/protocol/src/messages.ts b/packages/protocol/src/messages.ts
-index e09b416ea..2ec86c9ac 100644
+index 086bba323..6797b65d6 100644
 --- a/packages/protocol/src/messages.ts
 +++ b/packages/protocol/src/messages.ts
-@@ -2950,12 +2950,18 @@ export const ListCommandsRequestSchema = z.object({
+@@ -2970,12 +2970,18 @@ export const ListCommandsRequestSchema = z.object({
  export const RegisterPushTokenMessageSchema = z.object({
    type: z.literal("register_push_token"),
    token: z.string(),
@@ -84,7 +82,7 @@ index e09b416ea..2ec86c9ac 100644
  });
  
  export const PushUnregisterResponseSchema = z.object({
-@@ -3674,6 +3680,11 @@ export const ServerInfoStatusPayloadSchema = z
+@@ -3699,6 +3705,11 @@ export const ServerInfoStatusPayloadSchema = z
          relayConfig: z.boolean().optional(),
          // COMPAT(pushTokenRevocation): added in v0.3.2, remove gate after 2027-02-10.
          pushTokenRevocation: z.boolean().optional(),
@@ -919,10 +917,10 @@ index 540f05313..a4f23913c 100644
 +  }));
 +}
 diff --git a/packages/server/src/server/session.ts b/packages/server/src/server/session.ts
-index 9a2b2c082..cf6ca8a6a 100644
+index 3e7898279..8293a2764 100644
 --- a/packages/server/src/server/session.ts
 +++ b/packages/server/src/server/session.ts
-@@ -191,7 +191,7 @@ import type { HubRelationshipManagement } from "./hub/relationship-controller.js
+@@ -194,7 +194,7 @@ import type { HubRelationshipManagement } from "./hub/relationship-controller.js
  import { HubExecutionController } from "./hub/execution-controller.js";
  import type { HubExecutionAgents } from "./hub/daemon-executions.js";
  import { DownloadTokenStore } from "./file-download/token-store.js";
@@ -931,7 +929,7 @@ index 9a2b2c082..cf6ca8a6a 100644
  import {
    archivePersistedWorkspaceRecord,
    archiveWorkspaceContents,
-@@ -775,7 +775,7 @@ export class Session {
+@@ -779,7 +779,7 @@ export class Session {
        capabilities: ReadonlySet<ClientCapability>;
        appVersion: string | null;
        activity: ClientActivity | null;
@@ -940,7 +938,7 @@ index 9a2b2c082..cf6ca8a6a 100644
      }
    >();
    private unsubscribeTerminalWorkspaceContributionEvents: (() => void) | null = null;
-@@ -3195,12 +3195,18 @@ export class Session {
+@@ -3212,12 +3212,18 @@ export class Session {
          await this.handleListCommandsRequest(msg);
          return;
        case "register_push_token":
@@ -963,7 +961,7 @@ index 9a2b2c082..cf6ca8a6a 100644
          }
          this.emit({
            type: "push.unregister.response",
-@@ -5001,7 +5007,7 @@ export class Session {
+@@ -5018,7 +5024,7 @@ export class Session {
        void this.clearFocusedTerminalAttention(focusedTerminalId);
      }
      if (metadata.pushToken) {
@@ -972,7 +970,7 @@ index 9a2b2c082..cf6ca8a6a 100644
      }
    }
  
-@@ -5020,10 +5026,12 @@ export class Session {
+@@ -5037,10 +5043,12 @@ export class Session {
    /**
     * Handle push token registration
     */
@@ -1012,10 +1010,10 @@ index 2d48a93c8..5802b7a79 100644
  import { DAEMON_PERMISSIONS, parseServerInfoStatusPayload } from "./messages.js";
  import type { SpeechReadinessSnapshot } from "./speech/speech-runtime.js";
 diff --git a/packages/server/src/server/websocket-server.ts b/packages/server/src/server/websocket-server.ts
-index 88fb2c327..be29fc0bf 100644
+index dfa324315..243a48632 100644
 --- a/packages/server/src/server/websocket-server.ts
 +++ b/packages/server/src/server/websocket-server.ts
-@@ -1995,6 +1995,10 @@ export class VoiceAssistantWebSocketServer {
+@@ -1998,6 +1998,10 @@ export class VoiceAssistantWebSocketServer {
          ...(this.advertiseRelayConfig ? { relayConfig: true } : {}),
          // COMPAT(pushTokenRevocation): added in v0.3.2, remove gate after 2027-02-10.
          pushTokenRevocation: true,
@@ -1026,6 +1024,3 @@ index 88fb2c327..be29fc0bf 100644
          // COMPAT(plugins): added in v0.3.0, remove gate after 2027-08-07.
          plugins: true,
          pluginManagement: true,
--- 
-2.50.1 (Apple Git-155)
-

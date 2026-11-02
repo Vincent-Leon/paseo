@@ -1,7 +1,7 @@
-From 5c905e7164e710b9f3cb13d2a40336b7b1ac6fc9 Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Vincent Leon <leon@mbp.com>
 Date: Fri, 23 Oct 2026 18:11:45 +0800
-Subject: [PATCH 07/11] feat(harmony): run the web app inside the HarmonyOS
+Subject: [PATCH 07/14] feat(harmony): run the web app inside the HarmonyOS
  shell
 
 The HarmonyOS app is an ArkWeb shell (paseo-harmony) around this web build.
@@ -26,8 +26,6 @@ useHasFinePointer is always false there.
 
 The background connection's start and stop become awaitable, because the
 shell answers asynchronously.
-
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 ---
  packages/app/src/app/_layout.tsx              |   2 +
  packages/app/src/app/pair-scan.tsx            |  75 +++++-
@@ -86,10 +84,10 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
  create mode 100644 packages/app/src/utils/os-notifications.harmony.ts
 
 diff --git a/packages/app/src/app/_layout.tsx b/packages/app/src/app/_layout.tsx
-index 99022863f..951146005 100644
+index 083c6b214..4d7901a79 100644
 --- a/packages/app/src/app/_layout.tsx
 +++ b/packages/app/src/app/_layout.tsx
-@@ -92,6 +92,7 @@ import { KeyboardShiftProvider } from "@/keyboard/shift";
+@@ -93,6 +93,7 @@ import { KeyboardShiftProvider } from "@/keyboard/shift";
  import { useCompactWebViewportZoomLock } from "@/hooks/use-compact-web-viewport-zoom-lock";
  import { useOpenProject } from "@/hooks/use-open-project";
  import { useAppSettings } from "@/hooks/use-settings";
@@ -97,7 +95,7 @@ index 99022863f..951146005 100644
  import { useOpenAgentListGesture } from "@/mobile-panels/gestures";
  import { MobilePanelsProvider, useIsMobilePanelActive } from "@/mobile-panels/provider";
  import {
-@@ -580,6 +581,7 @@ function ProvidersWrapper({ children }: { children: ReactNode }) {
+@@ -581,6 +582,7 @@ function ProvidersWrapper({ children }: { children: ReactNode }) {
      <AppearanceProvider>
        <VoiceProvider>
          <DesktopWindowControlsSync />
@@ -325,10 +323,10 @@ index 292ec5361..2886b85cf 100644
    // and ends in more than one when the author left a blank line before the closing
    // fence; pasting any of them into a terminal runs the last line.
 diff --git a/packages/app/src/components/message.tsx b/packages/app/src/components/message.tsx
-index c8203cb90..96a7cd598 100644
+index c82b40e0e..72ca03a67 100644
 --- a/packages/app/src/components/message.tsx
 +++ b/packages/app/src/components/message.tsx
-@@ -15,6 +15,7 @@ import { TaskListRow } from "@/components/task-list-row";
+@@ -16,6 +16,7 @@ import { TaskListRow } from "@/components/task-list-row";
  import { LoadingSpinner } from "@/components/ui/loading-spinner";
  import { useIsCompactFormFactor } from "@/constants/layout";
  import { isNative, isWeb } from "@/constants/platform";
@@ -336,7 +334,7 @@ index c8203cb90..96a7cd598 100644
  import { useRevealedText, type MarkdownPhase } from "@/hooks/use-revealed-text";
  import { ICON_SIZE, type Theme } from "@/styles/theme";
  import { inlineUnistylesStyle } from "@/styles/unistyles-inline-style";
-@@ -414,7 +415,8 @@ export const UserMessage = memo(function UserMessage({
+@@ -418,7 +419,8 @@ export const UserMessage = memo(function UserMessage({
    const hasText = message.trim().length > 0;
    const hasImages = images.length > 0;
    const hasAttachments = attachments.length > 0;
@@ -346,7 +344,7 @@ index c8203cb90..96a7cd598 100644
    const formattedTimestamp = useMemo(
      () => formatMessageTimestamp(new Date(timestamp)),
      [timestamp],
-@@ -616,12 +618,14 @@ export const AssistantTurnFooter = memo(function AssistantTurnFooter({
+@@ -623,12 +625,14 @@ export const AssistantTurnFooter = memo(function AssistantTurnFooter({
  
    const primaryLabel = durationLabel || timestampLabel;
    const canSwap = Boolean(durationLabel && timestampLabel);
@@ -363,7 +361,7 @@ index c8203cb90..96a7cd598 100644
      if (revealTimerRef.current) {
        clearTimeout(revealTimerRef.current);
      }
-@@ -630,7 +634,7 @@ export const AssistantTurnFooter = memo(function AssistantTurnFooter({
+@@ -637,7 +641,7 @@ export const AssistantTurnFooter = memo(function AssistantTurnFooter({
        setPressedReveal(false);
        revealTimerRef.current = null;
      }, TIMESTAMP_REVEAL_MS);
@@ -373,7 +371,7 @@ index c8203cb90..96a7cd598 100644
      (target: AssistantForkTarget) => {
        return onFork?.(target);
 diff --git a/packages/app/src/components/model-browser.tsx b/packages/app/src/components/model-browser.tsx
-index 17924b233..06b0d6890 100644
+index 2ca6b6a9c..82635aadd 100644
 --- a/packages/app/src/components/model-browser.tsx
 +++ b/packages/app/src/components/model-browser.tsx
 @@ -42,6 +42,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
@@ -395,10 +393,10 @@ index 17924b233..06b0d6890 100644
      ({ hovered: buttonHovered, pressed }: PressableStateCallbackType & { hovered?: boolean }) => [
        styles.rowIconButton,
 diff --git a/packages/app/src/components/sidebar-workspace-list.tsx b/packages/app/src/components/sidebar-workspace-list.tsx
-index c3048e6d9..8eef21edf 100644
+index 333eb6822..7e6397acf 100644
 --- a/packages/app/src/components/sidebar-workspace-list.tsx
 +++ b/packages/app/src/components/sidebar-workspace-list.tsx
-@@ -146,6 +146,7 @@ import {
+@@ -147,6 +147,7 @@ import {
    isNative as platformIsNative,
    getIsElectron,
  } from "@/constants/platform";
@@ -406,7 +404,7 @@ index c3048e6d9..8eef21edf 100644
  import { getDesktopHost } from "@/desktop/host";
  import { OpenInFileManagerMenuItem } from "@/workspace/open-in-file-manager/menu-item";
  import { useLocalDaemonServerId } from "@/hooks/use-is-local-daemon";
-@@ -426,7 +427,8 @@ function ProjectRowTrailingActions({
+@@ -427,7 +428,8 @@ function ProjectRowTrailingActions({
    onRemoveProject?: () => void;
    removeProjectStatus: "idle" | "pending" | "success";
  }) {
@@ -416,7 +414,7 @@ index c3048e6d9..8eef21edf 100644
    return (
      <View style={styles.projectTrailingActions}>
        {worktreeTarget ? (
-@@ -1079,7 +1081,8 @@ function WorkspaceRowInner({
+@@ -1080,7 +1082,8 @@ function WorkspaceRowInner({
  }: WorkspaceRowInnerProps) {
    const isCompact = useIsCompactFormFactor();
    const [isPressed, setIsPressed] = useState(false);
@@ -521,29 +519,29 @@ index 000000000..c8301147c
 +
 +assertCoversExports<typeof Base, typeof import("./back-press.harmony")>();
 diff --git a/packages/app/src/components/ui/tooltip.tsx b/packages/app/src/components/ui/tooltip.tsx
-index ae00768a3..b196a8679 100644
+index 697a80fdc..f6a561734 100644
 --- a/packages/app/src/components/ui/tooltip.tsx
 +++ b/packages/app/src/components/ui/tooltip.tsx
-@@ -27,7 +27,8 @@ import { FadeIn, FadeOut } from "react-native-reanimated";
- import { StyleSheet } from "react-native-unistyles";
+@@ -28,7 +28,8 @@ import { StyleSheet } from "react-native-unistyles";
  import { useIsCompactFormFactor } from "@/constants/layout";
  import { FloatingSurface } from "@/components/ui/floating";
+ import { useRetainedPanelActive } from "@/components/retained-panel";
 -import { isNative, isWeb } from "@/constants/platform";
 +import { isWeb } from "@/constants/platform";
 +import { useHasFinePointer } from "@/hooks/use-fine-pointer";
  import { getOverlayRoot, OVERLAY_Z } from "@/lib/overlay-root";
  
  type Side = "top" | "bottom" | "left" | "right";
-@@ -256,7 +257,8 @@ export function Tooltip({
-   });
+@@ -258,7 +259,8 @@ export function Tooltip({
  
    const isCompact = useIsCompactFormFactor();
+   const active = useRetainedPanelActive();
 -  const opensOnPress = isNative || isCompact;
 +  const hasFinePointer = useHasFinePointer();
 +  const opensOnPress = !hasFinePointer || isCompact;
-   const enabled = opensOnPress ? enabledOnMobile : enabledOnDesktop;
+   const enabled = active && (opensOnPress ? enabledOnMobile : enabledOnDesktop);
  
-   const value = useMemo<TooltipContextValue>(
+   // Remove the portal in the inactive commit, before the retained chat freezes.
 diff --git a/packages/app/src/components/welcome-screen.tsx b/packages/app/src/components/welcome-screen.tsx
 index 1b3cdbe23..ee889c4f3 100644
 --- a/packages/app/src/components/welcome-screen.tsx
@@ -1627,10 +1625,10 @@ index f7645ac16..7a36cd72d 100644
      ? ({
          onPointerDown: (event: { stopPropagation?: () => void }) => {
 diff --git a/packages/app/src/screens/workspace/workspace-screen.tsx b/packages/app/src/screens/workspace/workspace-screen.tsx
-index bcc259361..6250b9d54 100644
+index 0b1cfe07a..a4720fa74 100644
 --- a/packages/app/src/screens/workspace/workspace-screen.tsx
 +++ b/packages/app/src/screens/workspace/workspace-screen.tsx
-@@ -31,7 +31,7 @@ import {
+@@ -32,7 +32,7 @@ import {
  } from "react";
  import { useStoreWithEqualityFn } from "zustand/traditional";
  import { useIsFocused } from "expo-router/react-navigation";
@@ -1639,7 +1637,7 @@ index bcc259361..6250b9d54 100644
  import { useQueryClient } from "@tanstack/react-query";
  import { useRouter, type Href } from "expo-router";
  import * as Clipboard from "expo-clipboard";
-@@ -219,6 +219,7 @@ import {
+@@ -223,6 +223,7 @@ import {
    type WorkspaceFileOpenRequest,
  } from "@/workspace/file-open";
  import { RenderProfile } from "@/utils/render-profiler";
@@ -1647,7 +1645,7 @@ index bcc259361..6250b9d54 100644
  import { useWorkspaceCheckoutStatus } from "@/screens/workspace/use-workspace-checkout-status";
  import { useWorkspacePullRequestDiscovery } from "@/panels/pull-request";
  
-@@ -1275,16 +1276,15 @@ function WorkspaceScreenContent({
+@@ -1287,16 +1288,15 @@ function WorkspaceScreenContent({
      // Back dismisses the compact overlay only. On a wide native layout the
      // explorer is a tab, `showMobileAgent` has no rendered consumer, and
      // returning true would swallow Back with nothing to show for it.
@@ -1668,7 +1666,7 @@ index bcc259361..6250b9d54 100644
  
    const workspaceLayout = useWorkspaceLayoutStore((state) =>
 diff --git a/packages/app/src/subagents/track.tsx b/packages/app/src/subagents/track.tsx
-index d759da431..7cb38ad33 100644
+index dd8c088e6..04a99690a 100644
 --- a/packages/app/src/subagents/track.tsx
 +++ b/packages/app/src/subagents/track.tsx
 @@ -10,7 +10,7 @@ import { ComposerTrackActions, ComposerTrackPill, ComposerTrackRow } from "@/com
@@ -1680,7 +1678,7 @@ index d759da431..7cb38ad33 100644
  import {
    WorkspaceTabIcon,
    type WorkspaceTabPresentation,
-@@ -218,7 +218,8 @@ function SubagentsTrackRow({
+@@ -225,7 +225,8 @@ function SubagentsTrackRow({
    const handleDetachPress = useCallback(() => {
      if (row.kind === "paseo") onDetachSubagent?.(row.address);
    }, [onDetachSubagent, row]);
@@ -1824,6 +1822,3 @@ index a23e7e092..2091bdc03 100644
    const editStyle = useCallback(
      ({ pressed }: PressableStateCallbackType) => [
        styles.rowEdit,
--- 
-2.50.1 (Apple Git-155)
-

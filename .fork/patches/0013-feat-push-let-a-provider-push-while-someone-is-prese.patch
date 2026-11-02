@@ -1,7 +1,8 @@
-From 2681695a04c681310b22c7884797fdfeda0d554e Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Vincent Leon <leon@mbp.com>
 Date: Sat, 24 Oct 2026 23:47:05 +0800
-Subject: [PATCH] feat(push): let a provider push while someone is present
+Subject: [PATCH 13/14] feat(push): let a provider push while someone is
+ present
 
 The daemon pushes only when nobody has used Paseo for three minutes;
 otherwise the most recently active client gets the alert in-app and no
@@ -18,8 +19,6 @@ the old rule exactly.
 
 The Huawei provider declares it by default. "pushWhilePresent": false
 in huawei-push/options.json restores the push-only-when-away rule.
-
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 ---
  packages/server/src/server/push/index.test.ts |  52 +++++++-
  packages/server/src/server/push/index.ts      | 122 ++++++++++++------
@@ -329,10 +328,10 @@ index 59dc71654..2a5cca77d 100644
     * Delivers to every subscription.
     *
 diff --git a/packages/server/src/server/session.ts b/packages/server/src/server/session.ts
-index 7252345b2..89672763c 100644
+index 6669835c6..bd5add507 100644
 --- a/packages/server/src/server/session.ts
 +++ b/packages/server/src/server/session.ts
-@@ -1565,6 +1565,11 @@ export class Session {
+@@ -1575,6 +1575,11 @@ export class Session {
      return source ? (this.clientSources.get(source)?.activity ?? null) : null;
    }
  
@@ -345,7 +344,7 @@ index 7252345b2..89672763c 100644
      | {
          provider?: string | null;
 diff --git a/packages/server/src/server/websocket-server.ts b/packages/server/src/server/websocket-server.ts
-index f107eebb8..97e2c9283 100644
+index 65d93581e..0e88d0799 100644
 --- a/packages/server/src/server/websocket-server.ts
 +++ b/packages/server/src/server/websocket-server.ts
 @@ -75,6 +75,7 @@ import {
@@ -356,7 +355,7 @@ index f107eebb8..97e2c9283 100644
  } from "./push/index.js";
  import { HUAWEI_PROVIDER_ID } from "./push/providers/huawei/provider.js";
  import type { ScriptHealthState } from "./script-health-monitor.js";
-@@ -2786,6 +2787,23 @@ export class VoiceAssistantWebSocketServer {
+@@ -2792,6 +2793,23 @@ export class VoiceAssistantWebSocketServer {
      };
    }
  
@@ -380,7 +379,7 @@ index f107eebb8..97e2c9283 100644
    private async broadcastAgentAttention(params: {
      agentId: string;
      provider: AgentProvider;
-@@ -2828,10 +2846,11 @@ export class VoiceAssistantWebSocketServer {
+@@ -2834,10 +2852,11 @@ export class VoiceAssistantWebSocketServer {
        permissionRequest: findLatestPermissionRequest(agent.pendingPermissions),
      });
  
@@ -393,7 +392,7 @@ index f107eebb8..97e2c9283 100644
        nowMs,
      });
  
-@@ -2839,6 +2858,11 @@ export class VoiceAssistantWebSocketServer {
+@@ -2845,6 +2864,11 @@ export class VoiceAssistantWebSocketServer {
        void this.pushNotificationSender.send(notification).catch((err) => {
          this.logger.warn({ err, agentId: params.agentId }, "Failed to send push notification");
        });
@@ -405,7 +404,7 @@ index f107eebb8..97e2c9283 100644
      }
  
      for (const { ws } of clientEntries) {
-@@ -2932,25 +2956,28 @@ export class VoiceAssistantWebSocketServer {
+@@ -2938,25 +2962,28 @@ export class VoiceAssistantWebSocketServer {
  
      const title = terminalAttentionTitle(params.reason);
      const body = params.terminalName;
@@ -451,6 +450,3 @@ index f107eebb8..97e2c9283 100644
      }
  
      for (const { ws } of clientEntries) {
--- 
-2.50.1 (Apple Git-155)
-

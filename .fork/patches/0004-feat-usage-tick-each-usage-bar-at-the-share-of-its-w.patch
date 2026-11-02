@@ -1,7 +1,7 @@
-From c5092d95d027c208907dcec88523048974d15219 Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Vincent Leon <leon@mbp.com>
 Date: Thu, 22 Oct 2026 15:03:59 +0800
-Subject: [PATCH 04/11] feat(usage): tick each usage bar at the share of its
+Subject: [PATCH 04/14] feat(usage): tick each usage bar at the share of its
  window that has elapsed
 
 Usage windows carried how much was used and when they reset, but not how
@@ -22,8 +22,6 @@ A kept report whose reset has passed gets no tick.
 Protocol: the field is optional. Older apps keep parsing (generated
 validators pass unknown keys); older daemons omit it and the bars show no
 tick.
-
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 ---
  packages/app/src/usage/balance-bar.tsx        | 54 +++---------------
  packages/app/src/usage/bars.browser.test.tsx  | 57 +++++++++++++++++++
@@ -705,10 +703,10 @@ index fa23ca9c9..2c2f7c883 100644
      [86400, "day", "d"],
      [3600, "hour", "h"],
 diff --git a/packages/protocol/src/messages.ts b/packages/protocol/src/messages.ts
-index 4beaf0a0b..e09b416ea 100644
+index 704c7ad27..086bba323 100644
 --- a/packages/protocol/src/messages.ts
 +++ b/packages/protocol/src/messages.ts
-@@ -6321,6 +6321,12 @@ export const ProviderUsageWindowSchema = z.object({
+@@ -6349,6 +6349,12 @@ export const ProviderUsageWindowSchema = z.object({
    usedPct: z.number().nullable().optional(),
    remainingPct: z.number().nullable().optional(),
    resetsAt: z.string().nullable().optional(),
@@ -721,7 +719,7 @@ index 4beaf0a0b..e09b416ea 100644
    runsOutAt: z.string().nullable().optional(),
    shortfallPct: z.number().nullable().optional(),
    tone: ProviderUsageToneSchema.optional(),
-@@ -6334,6 +6340,8 @@ export const ProviderUsageBalanceSchema = z.object({
+@@ -6362,6 +6368,8 @@ export const ProviderUsageBalanceSchema = z.object({
    limit: z.number().nullable().optional(),
    unit: z.enum(["usd", "credits", "requests", "tokens"]),
    resetsAt: z.string().nullable().optional(),
@@ -1084,7 +1082,7 @@ index cd2905ca2..b1693cf2c 100644
      }),
    );
 diff --git a/public-docs/plugins/reference.md b/public-docs/plugins/reference.md
-index 81b99b0dd..ee0a0e2e6 100644
+index 439892edb..3a78aebcb 100644
 --- a/public-docs/plugins/reference.md
 +++ b/public-docs/plugins/reference.md
 @@ -536,8 +536,15 @@ do not establish duration. When the provider omits it, use a neutral name such a
@@ -1105,6 +1103,3 @@ index 81b99b0dd..ee0a0e2e6 100644
  
  A window ID identifies a quota scope and period, never its response position, utilization, or
  reset instant. Scope model-specific quotas by the provider's stable feature ID, falling back to
--- 
-2.50.1 (Apple Git-155)
-
