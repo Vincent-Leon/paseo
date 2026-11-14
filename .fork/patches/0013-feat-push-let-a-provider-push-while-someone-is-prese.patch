@@ -328,10 +328,10 @@ index 59dc71654..2a5cca77d 100644
     * Delivers to every subscription.
     *
 diff --git a/packages/server/src/server/session.ts b/packages/server/src/server/session.ts
-index 6669835c6..bd5add507 100644
+index 8d3d8bb33..7aa7e994c 100644
 --- a/packages/server/src/server/session.ts
 +++ b/packages/server/src/server/session.ts
-@@ -1575,6 +1575,11 @@ export class Session {
+@@ -1581,6 +1581,11 @@ export class Session {
      return source ? (this.clientSources.get(source)?.activity ?? null) : null;
    }
  
@@ -344,10 +344,10 @@ index 6669835c6..bd5add507 100644
      | {
          provider?: string | null;
 diff --git a/packages/server/src/server/websocket-server.ts b/packages/server/src/server/websocket-server.ts
-index 65d93581e..0e88d0799 100644
+index 2de803c66..9e7711e18 100644
 --- a/packages/server/src/server/websocket-server.ts
 +++ b/packages/server/src/server/websocket-server.ts
-@@ -75,6 +75,7 @@ import {
+@@ -79,6 +79,7 @@ import {
    createPushNotifications,
    type PushNotifications,
    type PushNotificationSender,
@@ -355,7 +355,7 @@ index 65d93581e..0e88d0799 100644
  } from "./push/index.js";
  import { HUAWEI_PROVIDER_ID } from "./push/providers/huawei/provider.js";
  import type { ScriptHealthState } from "./script-health-monitor.js";
-@@ -2792,6 +2793,23 @@ export class VoiceAssistantWebSocketServer {
+@@ -2862,6 +2863,23 @@ export class VoiceAssistantWebSocketServer {
      };
    }
  
@@ -379,7 +379,7 @@ index 65d93581e..0e88d0799 100644
    private async broadcastAgentAttention(params: {
      agentId: string;
      provider: AgentProvider;
-@@ -2834,10 +2852,11 @@ export class VoiceAssistantWebSocketServer {
+@@ -2904,10 +2922,11 @@ export class VoiceAssistantWebSocketServer {
        permissionRequest: findLatestPermissionRequest(agent.pendingPermissions),
      });
  
@@ -392,7 +392,7 @@ index 65d93581e..0e88d0799 100644
        nowMs,
      });
  
-@@ -2845,6 +2864,11 @@ export class VoiceAssistantWebSocketServer {
+@@ -2915,6 +2934,11 @@ export class VoiceAssistantWebSocketServer {
        void this.pushNotificationSender.send(notification).catch((err) => {
          this.logger.warn({ err, agentId: params.agentId }, "Failed to send push notification");
        });
@@ -404,7 +404,7 @@ index 65d93581e..0e88d0799 100644
      }
  
      for (const { ws } of clientEntries) {
-@@ -2938,25 +2962,28 @@ export class VoiceAssistantWebSocketServer {
+@@ -3008,25 +3032,28 @@ export class VoiceAssistantWebSocketServer {
  
      const title = terminalAttentionTitle(params.reason);
      const body = params.terminalName;
@@ -450,3 +450,6 @@ index 65d93581e..0e88d0799 100644
      }
  
      for (const { ws } of clientEntries) {
+-- 
+2.50.1 (Apple Git-155)
+

@@ -37,10 +37,10 @@ same PASEO_HOME still ignores the whole `providers` block as before.
  7 files changed, 217 insertions(+), 61 deletions(-)
 
 diff --git a/packages/protocol/src/messages.ts b/packages/protocol/src/messages.ts
-index 6797b65d6..e9db51052 100644
+index e57304757..ca64cab59 100644
 --- a/packages/protocol/src/messages.ts
 +++ b/packages/protocol/src/messages.ts
-@@ -2974,6 +2974,11 @@ export const RegisterPushTokenMessageSchema = z.object({
+@@ -3003,6 +3003,11 @@ export const RegisterPushTokenMessageSchema = z.object({
    // no client can still register a token without naming its delivery channel.
    // Absent means Expo, which is the only channel that existed before this field.
    provider: z.string().min(1).optional(),
@@ -564,10 +564,10 @@ index a4f23913c..a49bce94f 100644
    }));
  }
 diff --git a/packages/server/src/server/session.ts b/packages/server/src/server/session.ts
-index 8293a2764..6669835c6 100644
+index b9988a93d..8d3d8bb33 100644
 --- a/packages/server/src/server/session.ts
 +++ b/packages/server/src/server/session.ts
-@@ -3212,7 +3212,7 @@ export class Session {
+@@ -3247,7 +3247,7 @@ export class Session {
          await this.handleListCommandsRequest(msg);
          return;
        case "register_push_token":
@@ -576,7 +576,7 @@ index 8293a2764..6669835c6 100644
          return;
        case "push.unregister.request":
          {
-@@ -5043,11 +5043,15 @@ export class Session {
+@@ -5090,11 +5090,15 @@ export class Session {
    /**
     * Handle push token registration
     */
@@ -594,3 +594,6 @@ index 8293a2764..6669835c6 100644
      this.sessionLogger.info({ provider: resolved }, "Registered push token");
    }
  
+-- 
+2.50.1 (Apple Git-155)
+

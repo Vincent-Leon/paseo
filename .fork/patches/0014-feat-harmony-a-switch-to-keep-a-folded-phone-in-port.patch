@@ -30,13 +30,13 @@ Every other build gets the base module, which renders nothing.
  create mode 100644 packages/app/src/screens/settings/general/fold-rotation-section.tsx
 
 diff --git a/packages/app/src/i18n/resources/ar.ts b/packages/app/src/i18n/resources/ar.ts
-index ba1bf7357..9d1dd24fd 100644
+index 4c3a776e4..2832ba239 100644
 --- a/packages/app/src/i18n/resources/ar.ts
 +++ b/packages/app/src/i18n/resources/ar.ts
-@@ -2373,6 +2373,11 @@ export const ar: TranslationResources = {
-     general: {
-       title: "عام",
-       sending: "الإرسال",
+@@ -2444,6 +2444,11 @@ export const ar: TranslationResources = {
+         description: "أعد المرور على المظهر والمزوّدين والمشاريع وإقران الهاتف",
+         action: "إظهار الإعداد مجددًا",
+       },
 +      foldRotation: {
 +        title: "الشاشة",
 +        label: "الوضع الرأسي عند الطي",
@@ -46,13 +46,13 @@ index ba1bf7357..9d1dd24fd 100644
          title: "بيانات المتصفح",
          siteData: "ملفات تعريف الارتباط وبيانات المواقع",
 diff --git a/packages/app/src/i18n/resources/en.ts b/packages/app/src/i18n/resources/en.ts
-index 5f3ae8367..6f889cc3f 100644
+index fcedae646..d35e32128 100644
 --- a/packages/app/src/i18n/resources/en.ts
 +++ b/packages/app/src/i18n/resources/en.ts
-@@ -2462,6 +2462,11 @@ export const en = {
-     general: {
-       title: "General",
-       sending: "Sending",
+@@ -2534,6 +2534,11 @@ export const en = {
+         description: "Walk through appearance, providers, projects and phone pairing again",
+         action: "Show setup again",
+       },
 +      foldRotation: {
 +        title: "Screen",
 +        label: "Keep portrait when folded",
@@ -62,13 +62,13 @@ index 5f3ae8367..6f889cc3f 100644
          title: "Browser data",
          siteData: "Cookies and site data",
 diff --git a/packages/app/src/i18n/resources/es.ts b/packages/app/src/i18n/resources/es.ts
-index 41972758f..63b8146bc 100644
+index e4082a9df..9c4ce0c1e 100644
 --- a/packages/app/src/i18n/resources/es.ts
 +++ b/packages/app/src/i18n/resources/es.ts
-@@ -2385,6 +2385,11 @@ export const es: TranslationResources = {
-     general: {
-       title: "General",
-       sending: "Envío",
+@@ -2458,6 +2458,11 @@ export const es: TranslationResources = {
+           "Vuelve a recorrer apariencia, proveedores, proyectos y emparejamiento del teléfono",
+         action: "Mostrar configuración de nuevo",
+       },
 +      foldRotation: {
 +        title: "Pantalla",
 +        label: "Mantener vertical al plegar",
@@ -78,13 +78,13 @@ index 41972758f..63b8146bc 100644
          title: "Datos del navegador",
          siteData: "Cookies y datos de sitios",
 diff --git a/packages/app/src/i18n/resources/fr.ts b/packages/app/src/i18n/resources/fr.ts
-index ac62b5879..4e3ead7b6 100644
+index dd9898a81..db7d6b67a 100644
 --- a/packages/app/src/i18n/resources/fr.ts
 +++ b/packages/app/src/i18n/resources/fr.ts
-@@ -2385,6 +2385,11 @@ export const fr: TranslationResources = {
-     general: {
-       title: "Général",
-       sending: "Envoi",
+@@ -2459,6 +2459,11 @@ export const fr: TranslationResources = {
+           "Reprendre l'apparence, les fournisseurs, les projets et l'appairage du téléphone",
+         action: "Afficher la configuration",
+       },
 +      foldRotation: {
 +        title: "Écran",
 +        label: "Rester en portrait une fois plié",
@@ -94,13 +94,13 @@ index ac62b5879..4e3ead7b6 100644
          title: "Données du navigateur",
          siteData: "Cookies et données des sites",
 diff --git a/packages/app/src/i18n/resources/ja.ts b/packages/app/src/i18n/resources/ja.ts
-index b21e6a5c1..81c8c946d 100644
+index cd89d9498..16b819602 100644
 --- a/packages/app/src/i18n/resources/ja.ts
 +++ b/packages/app/src/i18n/resources/ja.ts
-@@ -2358,6 +2358,11 @@ export const ja: TranslationResources = {
-     general: {
-       title: "一般",
-       sending: "送信",
+@@ -2432,6 +2432,11 @@ export const ja: TranslationResources = {
+           "外観、プロバイダー、プロジェクト、スマートフォンのペアリングをもう一度設定します",
+         action: "セットアップを再表示",
+       },
 +      foldRotation: {
 +        title: "画面",
 +        label: "折りたたみ時は縦向きに固定",
@@ -110,13 +110,13 @@ index b21e6a5c1..81c8c946d 100644
          title: "ブラウザーデータ",
          siteData: "Cookie とサイトデータ",
 diff --git a/packages/app/src/i18n/resources/ko.ts b/packages/app/src/i18n/resources/ko.ts
-index 3e06f9c74..61b2a0ee7 100644
+index 7f7d79403..e6eaab1fb 100644
 --- a/packages/app/src/i18n/resources/ko.ts
 +++ b/packages/app/src/i18n/resources/ko.ts
-@@ -2347,6 +2347,11 @@ export const ko: TranslationResources = {
-     general: {
-       title: "일반",
-       sending: "전송",
+@@ -2419,6 +2419,11 @@ export const ko: TranslationResources = {
+         description: "모양, 제공자, 프로젝트, 휴대폰 페어링을 다시 진행합니다",
+         action: "설정 다시 보기",
+       },
 +      foldRotation: {
 +        title: "화면",
 +        label: "접었을 때 세로 고정",
@@ -126,13 +126,13 @@ index 3e06f9c74..61b2a0ee7 100644
          title: "브라우저 데이터",
          siteData: "쿠키 및 사이트 데이터",
 diff --git a/packages/app/src/i18n/resources/pt-BR.ts b/packages/app/src/i18n/resources/pt-BR.ts
-index 95e948913..1a8d29365 100644
+index 2bdbe2229..88a982bfa 100644
 --- a/packages/app/src/i18n/resources/pt-BR.ts
 +++ b/packages/app/src/i18n/resources/pt-BR.ts
-@@ -2370,6 +2370,11 @@ export const ptBR: TranslationResources = {
-     general: {
-       title: "Geral",
-       sending: "Envio",
+@@ -2442,6 +2442,11 @@ export const ptBR: TranslationResources = {
+         description: "Rever aparência, provedores, projetos e pareamento do celular",
+         action: "Mostrar configuração novamente",
+       },
 +      foldRotation: {
 +        title: "Tela",
 +        label: "Manter retrato quando dobrado",
@@ -142,13 +142,13 @@ index 95e948913..1a8d29365 100644
          title: "Dados do navegador",
          siteData: "Cookies e dados de sites",
 diff --git a/packages/app/src/i18n/resources/ru.ts b/packages/app/src/i18n/resources/ru.ts
-index ba642fb50..22de1f6f9 100644
+index c580207d8..36d0c4132 100644
 --- a/packages/app/src/i18n/resources/ru.ts
 +++ b/packages/app/src/i18n/resources/ru.ts
-@@ -2372,6 +2372,11 @@ export const ru: TranslationResources = {
-     general: {
-       title: "Основные",
-       sending: "Отправка",
+@@ -2445,6 +2445,11 @@ export const ru: TranslationResources = {
+         description: "Снова пройти оформление, провайдеры, проекты и привязку телефона",
+         action: "Показать настройку снова",
+       },
 +      foldRotation: {
 +        title: "Экран",
 +        label: "Книжная ориентация в сложенном виде",
@@ -158,13 +158,13 @@ index ba642fb50..22de1f6f9 100644
          title: "Данные браузера",
          siteData: "Файлы cookie и данные сайтов",
 diff --git a/packages/app/src/i18n/resources/zh-CN.ts b/packages/app/src/i18n/resources/zh-CN.ts
-index 98b91f360..f4511b820 100644
+index 942dd7701..635445bc2 100644
 --- a/packages/app/src/i18n/resources/zh-CN.ts
 +++ b/packages/app/src/i18n/resources/zh-CN.ts
-@@ -2314,6 +2314,11 @@ export const zhCN: TranslationResources = {
-     general: {
-       title: "通用",
-       sending: "发送",
+@@ -2384,6 +2384,11 @@ export const zhCN: TranslationResources = {
+         description: "重新设置外观、提供方、项目和手机配对",
+         action: "再次显示设置",
+       },
 +      foldRotation: {
 +        title: "屏幕",
 +        label: "折叠时保持竖屏",
@@ -174,7 +174,7 @@ index 98b91f360..f4511b820 100644
          title: "浏览器数据",
          siteData: "Cookie 和网站数据",
 diff --git a/packages/app/src/screens/settings-screen.tsx b/packages/app/src/screens/settings-screen.tsx
-index 78425bf20..162ff5e7f 100644
+index fa87c28cf..f48f83c7d 100644
 --- a/packages/app/src/screens/settings-screen.tsx
 +++ b/packages/app/src/screens/settings-screen.tsx
 @@ -56,6 +56,7 @@ import { TerminalSection } from "@/screens/settings/terminal/terminal-section";
@@ -185,7 +185,7 @@ index 78425bf20..162ff5e7f 100644
  import {
    useAppSettings,
    useSettings,
-@@ -1353,6 +1354,7 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
+@@ -1367,6 +1368,7 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
              <>
                <GeneralSection settings={settings} handleLanguageChange={handleLanguageChange} />
                <SendingSection />
@@ -265,3 +265,6 @@ index 000000000..5942dbd06
 +export function FoldRotationSection(): null {
 +  return null;
 +}
+-- 
+2.50.1 (Apple Git-155)
+

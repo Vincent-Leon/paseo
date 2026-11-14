@@ -15,7 +15,7 @@ device unless rotation lock is on. iOS keeps its configuration.
  create mode 100644 packages/app/plugins/with-android-user-orientation.js
 
 diff --git a/packages/app/app.config.js b/packages/app/app.config.js
-index 7ddfc9502..9f92cce90 100644
+index eb7907e5c..cb45960e5 100644
 --- a/packages/app/app.config.js
 +++ b/packages/app/app.config.js
 @@ -4,6 +4,7 @@ const pkg = require("./package.json");
@@ -61,3 +61,6 @@ index 000000000..d9ca3d518
 +}
 +
 +module.exports = withAndroidUserOrientation;
+-- 
+2.50.1 (Apple Git-155)
+

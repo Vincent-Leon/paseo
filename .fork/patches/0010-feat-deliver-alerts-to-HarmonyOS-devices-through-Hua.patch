@@ -122,10 +122,10 @@ index 000000000..e997b8452
 +
 +assertCoversExports<typeof Base, typeof import("./index.harmony")>();
 diff --git a/packages/client/src/daemon-client.ts b/packages/client/src/daemon-client.ts
-index 524c3e264..0b4cbc864 100644
+index 49d3d13af..5d373d78d 100644
 --- a/packages/client/src/daemon-client.ts
 +++ b/packages/client/src/daemon-client.ts
-@@ -2388,18 +2388,32 @@ export class DaemonClient {
+@@ -2489,18 +2489,32 @@ export class DaemonClient {
      });
    }
  
@@ -761,10 +761,10 @@ index 000000000..1cd8f0c7c
 +  }
 +}
 diff --git a/packages/server/src/server/websocket-server.ts b/packages/server/src/server/websocket-server.ts
-index 243a48632..65d93581e 100644
+index 27d26a13b..2de803c66 100644
 --- a/packages/server/src/server/websocket-server.ts
 +++ b/packages/server/src/server/websocket-server.ts
-@@ -76,6 +76,7 @@ import {
+@@ -80,6 +80,7 @@ import {
    type PushNotifications,
    type PushNotificationSender,
  } from "./push/index.js";
@@ -772,7 +772,7 @@ index 243a48632..65d93581e 100644
  import type { ScriptHealthState } from "./script-health-monitor.js";
  import type { ServiceProxySubsystem } from "./service-proxy.js";
  import type { WorkspaceScriptRuntimeStore } from "./workspace-script-runtime-store.js";
-@@ -799,6 +800,9 @@ export class VoiceAssistantWebSocketServer {
+@@ -804,6 +805,9 @@ export class VoiceAssistantWebSocketServer {
      this.pushNotifications = createPushNotifications({
        logger: pushLogger,
        filePath: join(paseoHome, "push-tokens.json"),
@@ -782,3 +782,6 @@ index 243a48632..65d93581e 100644
      });
      this.pushNotificationSender = pushNotificationSender ?? this.pushNotifications;
  
+-- 
+2.50.1 (Apple Git-155)
+

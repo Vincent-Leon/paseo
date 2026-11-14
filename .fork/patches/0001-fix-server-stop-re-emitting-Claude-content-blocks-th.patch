@@ -348,10 +348,10 @@ index 000000000..281f380f1
 +  });
 +});
 diff --git a/packages/server/src/server/agent/providers/claude/agent.ts b/packages/server/src/server/agent/providers/claude/agent.ts
-index 6516ff81b..902a45d4b 100644
+index d232185cb..72ea55774 100644
 --- a/packages/server/src/server/agent/providers/claude/agent.ts
 +++ b/packages/server/src/server/agent/providers/claude/agent.ts
-@@ -1201,6 +1201,24 @@ interface TimelineMessageState {
+@@ -1235,6 +1235,24 @@ interface TimelineMessageState {
    stopped: boolean;
  }
  
@@ -376,7 +376,7 @@ index 6516ff81b..902a45d4b 100644
  class TimelineAssembler {
    private readonly messages = new Map<string, TimelineMessageState>();
    private readonly finalizedMessageIds = new Set<string>();
-@@ -1335,16 +1353,10 @@ class TimelineAssembler {
+@@ -1369,16 +1387,10 @@ class TimelineAssembler {
        .join("");
  
      if (assistantText.length > 0) {
@@ -395,3 +395,6 @@ index 6516ff81b..902a45d4b 100644
      }
      return this.emitNewContent(state);
    }
+-- 
+2.50.1 (Apple Git-155)
+
