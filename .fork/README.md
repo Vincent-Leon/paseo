@@ -21,7 +21,7 @@ This fork (`Vincent-Leon/paseo`) republishes each stable release of `getpaseo/pa
 
 ## How a release flows
 
-Every three hours, and on manual dispatch, the workflow runs these jobs:
+Twice a day (03:41 and 15:41 UTC), and on manual dispatch, the workflow runs these jobs:
 
 1. **resolve** reads `repos/getpaseo/paseo/releases/latest`. It accepts only a `vX.Y.Z` tag that is a published, non-prerelease upstream release. It stops if this fork already has a release with that tag, or if the tag is listed in the `FORK_SKIP_TAGS` repository variable. A build-only dispatch (`publish` off) skips both checks and also accepts a published upstream prerelease.
 2. **build** checks out the upstream tag, applies the patches, installs dependencies and runs the tests in `tests.txt`. It has no secrets and a read-only token.
@@ -92,6 +92,7 @@ Remaining risks:
 - Do not push upstream's `main` or upstream `v*` tags to this fork while Actions is enabled. Upstream workflows trigger on `main` pushes and `v*` tags, and they would run from the commit you push. Feature branches trigger nothing.
 - Issues must be enabled for failure reports.
 - GitHub disables scheduled workflows in public repositories after 60 days without repository activity. If that happens, run `gh workflow enable fork-patched-release.yml -R Vincent-Leon/paseo`.
+- GitHub can also disable every workflow on a fork to cut wasted compute. The Actions permissions API still reports `enabled: true`, while dispatches fail with `HTTP 422: Actions has been disabled for this repository`. Only the owner's "I understand my workflows, go ahead and enable them" button on the repository's Actions page lifts it. The schedule stays at twice a day so the fork spends little compute between upstream releases.
 - Keep the desktop app on the Stable channel. The fork publishes only stable releases.
 
 ## Patches
