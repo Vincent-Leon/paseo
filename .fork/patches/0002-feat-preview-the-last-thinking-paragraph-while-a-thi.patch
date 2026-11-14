@@ -276,7 +276,7 @@ index 000000000..1bbe750af
 +  return `${kept.trimEnd()}…`;
 +}
 diff --git a/packages/app/src/agent-stream/view.tsx b/packages/app/src/agent-stream/view.tsx
-index cb9999745..2da488c23 100644
+index 72923b421..9ec12fcde 100644
 --- a/packages/app/src/agent-stream/view.tsx
 +++ b/packages/app/src/agent-stream/view.tsx
 @@ -88,6 +88,7 @@ import {
@@ -287,7 +287,7 @@ index cb9999745..2da488c23 100644
  import {
    type BottomAnchorLocalRequest,
    type BottomAnchorRouteRequest,
-@@ -796,6 +797,7 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
+@@ -797,6 +798,7 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
              onInlineDetailsExpandedChangeByItemId={setInlineDetailsExpanded}
              text={item.text}
              status={item.status}
@@ -295,7 +295,7 @@ index cb9999745..2da488c23 100644
              isLastInSequence={layoutItem.isLastInToolSequence}
              defaultExpanded={autoExpandReasoning}
            />
-@@ -887,6 +889,10 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
+@@ -888,6 +890,10 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
              group={group}
              expanded={expanded}
              isLastInSequence={layoutItem.isLastInToolSequence}
@@ -306,7 +306,7 @@ index cb9999745..2da488c23 100644
              onExpandedChange={setToolCallGroupExpanded}
            >
              {expanded
-@@ -899,6 +905,10 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
+@@ -900,6 +906,10 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
                          itemId={call.id}
                          text={call.text}
                          status={call.status}
@@ -317,7 +317,7 @@ index cb9999745..2da488c23 100644
                          isLastInSequence={index === group.run.calls.length - 1}
                          defaultExpanded={false}
                          standalone={false}
-@@ -1401,6 +1411,7 @@ interface ThoughtSlotProps {
+@@ -1402,6 +1412,7 @@ interface ThoughtSlotProps {
    onInlineDetailsExpandedChangeByItemId: (itemId: string, expanded: boolean) => void;
    text: string;
    status: Extract<StreamItem, { kind: "thought" }>["status"];
@@ -325,7 +325,7 @@ index cb9999745..2da488c23 100644
    isLastInSequence: boolean;
    defaultExpanded: boolean;
    standalone?: boolean;
-@@ -1412,6 +1423,7 @@ function ThoughtSlot({
+@@ -1413,6 +1424,7 @@ function ThoughtSlot({
    onInlineDetailsExpandedChangeByItemId,
    text,
    status,
@@ -333,7 +333,7 @@ index cb9999745..2da488c23 100644
    isLastInSequence,
    defaultExpanded,
    standalone,
-@@ -1422,6 +1434,7 @@ function ThoughtSlot({
+@@ -1423,6 +1435,7 @@ function ThoughtSlot({
        itemId={itemId}
        onInlineDetailsExpandedChangeByItemId={onInlineDetailsExpandedChangeByItemId}
        toolName="thinking"
@@ -342,7 +342,7 @@ index cb9999745..2da488c23 100644
        status={status === "ready" ? "completed" : "executing"}
        isLastInSequence={isLastInSequence}
 diff --git a/packages/app/src/components/message.tsx b/packages/app/src/components/message.tsx
-index 2c6165d30..c82b40e0e 100644
+index 0ec5cbfb4..77b7f4616 100644
 --- a/packages/app/src/components/message.tsx
 +++ b/packages/app/src/components/message.tsx
 @@ -938,6 +938,14 @@ const expandableBadgeStylesheet = StyleSheet.create((theme) => ({
@@ -360,7 +360,7 @@ index 2c6165d30..c82b40e0e 100644
    shimmerText: {
      color: "transparent",
      fontSize: theme.fontSize.base,
-@@ -1516,6 +1524,8 @@ export const TodoListCard = memo(function TodoListCard({
+@@ -1517,6 +1525,8 @@ export const TodoListCard = memo(function TodoListCard({
  interface ExpandableBadgeProps {
    label: string;
    secondaryLabel?: string;
@@ -369,7 +369,7 @@ index 2c6165d30..c82b40e0e 100644
    icon?: ComponentType<{ size?: number; color?: string }>;
    isExpanded: boolean;
    style?: StyleProp<ViewStyle>;
-@@ -1880,6 +1890,7 @@ export const ExpandableBadge = memo(function ExpandableBadge({
+@@ -1881,6 +1891,7 @@ export const ExpandableBadge = memo(function ExpandableBadge({
    label,
    style,
    secondaryLabel,
@@ -377,7 +377,7 @@ index 2c6165d30..c82b40e0e 100644
    icon,
    isExpanded,
    onToggle,
-@@ -2189,6 +2200,11 @@ export const ExpandableBadge = memo(function ExpandableBadge({
+@@ -2190,6 +2201,11 @@ export const ExpandableBadge = memo(function ExpandableBadge({
              onOpenFileHoverOut={handleOpenFileHoverOut}
            />
          </View>
@@ -389,7 +389,7 @@ index 2c6165d30..c82b40e0e 100644
        </Pressable>
        {detailContent ? (
          <Pressable
-@@ -2207,6 +2223,7 @@ export const ExpandableBadge = memo(function ExpandableBadge({
+@@ -2208,6 +2224,7 @@ export const ExpandableBadge = memo(function ExpandableBadge({
  function areExpandableBadgePropsEqual(previous: ExpandableBadgeProps, next: ExpandableBadgeProps) {
    if (previous.label !== next.label) return false;
    if (previous.secondaryLabel !== next.secondaryLabel) return false;
@@ -397,7 +397,7 @@ index 2c6165d30..c82b40e0e 100644
    if (previous.icon !== next.icon) return false;
    if (previous.isExpanded !== next.isExpanded) return false;
    if (previous.style !== next.style) return false;
-@@ -2227,6 +2244,7 @@ interface ToolCallProps {
+@@ -2228,6 +2245,7 @@ interface ToolCallProps {
    agentMessage?: AgentMessage;
    serverId?: string;
    toolName: string;
@@ -405,7 +405,7 @@ index 2c6165d30..c82b40e0e 100644
    args?: unknown;
    result?: unknown;
    error?: unknown;
-@@ -2251,6 +2269,7 @@ export const ToolCall = memo(function ToolCall({
+@@ -2252,6 +2270,7 @@ export const ToolCall = memo(function ToolCall({
    agentMessage,
    serverId,
    toolName,
@@ -413,7 +413,7 @@ index 2c6165d30..c82b40e0e 100644
    args,
    result,
    error,
-@@ -2408,6 +2427,7 @@ export const ToolCall = memo(function ToolCall({
+@@ -2409,6 +2428,7 @@ export const ToolCall = memo(function ToolCall({
        testID="tool-call-badge"
        label={presentation.displayName}
        secondaryLabel={presentation.summary}
@@ -421,7 +421,7 @@ index 2c6165d30..c82b40e0e 100644
        icon={presentation.icon}
        isExpanded={shouldRenderInline && isExpanded}
        onToggle={presentation.canOpenDetails ? handleToggle : undefined}
-@@ -2424,6 +2444,7 @@ export const ToolCall = memo(function ToolCall({
+@@ -2425,6 +2445,7 @@ export const ToolCall = memo(function ToolCall({
  
  function areToolCallPropsEqual(previous: ToolCallProps, next: ToolCallProps) {
    if (previous.toolName !== next.toolName) return false;
@@ -590,10 +590,10 @@ index 281f380f1..14aa2c764 100644
 +  });
  });
 diff --git a/packages/server/src/server/agent/providers/claude/agent.ts b/packages/server/src/server/agent/providers/claude/agent.ts
-index 902a45d4b..e800fbc68 100644
+index 72ea55774..103fb40c0 100644
 --- a/packages/server/src/server/agent/providers/claude/agent.ts
 +++ b/packages/server/src/server/agent/providers/claude/agent.ts
-@@ -1199,6 +1199,26 @@ interface TimelineMessageState {
+@@ -1233,6 +1233,26 @@ interface TimelineMessageState {
    emittedAssistantLength: number;
    emittedReasoningLength: number;
    stopped: boolean;
@@ -620,7 +620,7 @@ index 902a45d4b..e800fbc68 100644
  }
  
  // An assistant message carries either a cumulative snapshot of the API message or, as the
-@@ -1209,14 +1229,14 @@ interface TimelineMessageState {
+@@ -1243,14 +1263,14 @@ interface TimelineMessageState {
  // messages on (always, in production) the stream deltas carry every block, so two identical
  // blocks are both shown. Without stream deltas, a block that matches the end of the text
  // before it cannot be told apart from a re-delivered snapshot and is not shown again.
@@ -637,7 +637,7 @@ index 902a45d4b..e800fbc68 100644
  }
  
  class TimelineAssembler {
-@@ -1294,7 +1314,7 @@ class TimelineAssembler {
+@@ -1328,7 +1348,7 @@ class TimelineAssembler {
      }
  
      if (eventType === "content_block_start") {
@@ -646,7 +646,7 @@ index 902a45d4b..e800fbc68 100644
      }
  
      if (eventType === "content_block_delta") {
-@@ -1304,6 +1324,27 @@ class TimelineAssembler {
+@@ -1338,6 +1358,27 @@ class TimelineAssembler {
      return [];
    }
  
@@ -674,7 +674,7 @@ index 902a45d4b..e800fbc68 100644
    private consumeDeltaContent(
      content: unknown,
      runId: string | null,
-@@ -1333,8 +1374,11 @@ class TimelineAssembler {
+@@ -1367,8 +1408,11 @@ class TimelineAssembler {
        if (fragment.kind === "assistant") {
          state.assistantText += fragment.text;
        } else {
@@ -687,7 +687,7 @@ index 902a45d4b..e800fbc68 100644
      }
      return this.emitNewContent(state);
    }
-@@ -1343,20 +1387,29 @@ class TimelineAssembler {
+@@ -1377,20 +1421,29 @@ class TimelineAssembler {
      state: TimelineMessageState,
      fragments: TimelineFragment[],
    ): AgentTimelineItem[] {
@@ -727,7 +727,7 @@ index 902a45d4b..e800fbc68 100644
      }
      return this.emitNewContent(state);
    }
-@@ -1412,6 +1465,9 @@ class TimelineAssembler {
+@@ -1446,6 +1499,9 @@ class TimelineAssembler {
        emittedAssistantLength: 0,
        emittedReasoningLength: 0,
        stopped: false,
@@ -737,3 +737,6 @@ index 902a45d4b..e800fbc68 100644
      };
      this.messages.set(messageId, created);
      if (runId) {
+-- 
+2.50.1 (Apple Git-155)
+

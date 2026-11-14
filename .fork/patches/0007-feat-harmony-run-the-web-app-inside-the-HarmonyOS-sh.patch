@@ -84,10 +84,10 @@ shell answers asynchronously.
  create mode 100644 packages/app/src/utils/os-notifications.harmony.ts
 
 diff --git a/packages/app/src/app/_layout.tsx b/packages/app/src/app/_layout.tsx
-index 083c6b214..4d7901a79 100644
+index 298178477..e62c686ab 100644
 --- a/packages/app/src/app/_layout.tsx
 +++ b/packages/app/src/app/_layout.tsx
-@@ -93,6 +93,7 @@ import { KeyboardShiftProvider } from "@/keyboard/shift";
+@@ -94,6 +94,7 @@ import { KeyboardShiftProvider } from "@/keyboard/shift";
  import { useCompactWebViewportZoomLock } from "@/hooks/use-compact-web-viewport-zoom-lock";
  import { useOpenProject } from "@/hooks/use-open-project";
  import { useAppSettings } from "@/hooks/use-settings";
@@ -95,7 +95,7 @@ index 083c6b214..4d7901a79 100644
  import { useOpenAgentListGesture } from "@/mobile-panels/gestures";
  import { MobilePanelsProvider, useIsMobilePanelActive } from "@/mobile-panels/provider";
  import {
-@@ -581,6 +582,7 @@ function ProvidersWrapper({ children }: { children: ReactNode }) {
+@@ -615,6 +616,7 @@ function ProvidersWrapper({ children }: { children: ReactNode }) {
      <AppearanceProvider>
        <VoiceProvider>
          <DesktopWindowControlsSync />
@@ -323,7 +323,7 @@ index 292ec5361..2886b85cf 100644
    // and ends in more than one when the author left a blank line before the closing
    // fence; pasting any of them into a terminal runs the last line.
 diff --git a/packages/app/src/components/message.tsx b/packages/app/src/components/message.tsx
-index c82b40e0e..72ca03a67 100644
+index 77b7f4616..5e826d87f 100644
 --- a/packages/app/src/components/message.tsx
 +++ b/packages/app/src/components/message.tsx
 @@ -16,6 +16,7 @@ import { TaskListRow } from "@/components/task-list-row";
@@ -371,7 +371,7 @@ index c82b40e0e..72ca03a67 100644
      (target: AssistantForkTarget) => {
        return onFork?.(target);
 diff --git a/packages/app/src/components/model-browser.tsx b/packages/app/src/components/model-browser.tsx
-index 2ca6b6a9c..82635aadd 100644
+index ec1a26a1d..e9bbd23e8 100644
 --- a/packages/app/src/components/model-browser.tsx
 +++ b/packages/app/src/components/model-browser.tsx
 @@ -42,6 +42,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
@@ -393,7 +393,7 @@ index 2ca6b6a9c..82635aadd 100644
      ({ hovered: buttonHovered, pressed }: PressableStateCallbackType & { hovered?: boolean }) => [
        styles.rowIconButton,
 diff --git a/packages/app/src/components/sidebar-workspace-list.tsx b/packages/app/src/components/sidebar-workspace-list.tsx
-index 333eb6822..7e6397acf 100644
+index 8697a4b27..908e03127 100644
 --- a/packages/app/src/components/sidebar-workspace-list.tsx
 +++ b/packages/app/src/components/sidebar-workspace-list.tsx
 @@ -147,6 +147,7 @@ import {
@@ -455,7 +455,7 @@ index 7a959435b..dce656779 100644
                icon={collapsed ? ChevronRight : ChevronDown}
                size="xs"
 diff --git a/packages/app/src/components/sidebar/sidebar-status-list.tsx b/packages/app/src/components/sidebar/sidebar-status-list.tsx
-index 26440c37a..5ee7816d9 100644
+index edb295324..a0ac4a667 100644
 --- a/packages/app/src/components/sidebar/sidebar-status-list.tsx
 +++ b/packages/app/src/components/sidebar/sidebar-status-list.tsx
 @@ -27,6 +27,7 @@ import type { SidebarWorkspaceGroup } from "@/components/sidebar/sidebar-labels"
@@ -466,7 +466,7 @@ index 26440c37a..5ee7816d9 100644
  import { useIsCompactFormFactor } from "@/constants/layout";
  import { StyleSheet } from "react-native-unistyles";
  import { density, densityIconBox, densityIconProps } from "@/styles/density";
-@@ -898,7 +899,8 @@ function StatusWorkspaceRowInnerContent({
+@@ -929,7 +930,8 @@ function StatusWorkspaceRowInnerContent({
    dragInteraction?: ReturnType<typeof useLongPressDragInteraction>;
  }) {
    const isCompact = useIsCompactFormFactor();
@@ -519,7 +519,7 @@ index 000000000..c8301147c
 +
 +assertCoversExports<typeof Base, typeof import("./back-press.harmony")>();
 diff --git a/packages/app/src/components/ui/tooltip.tsx b/packages/app/src/components/ui/tooltip.tsx
-index 697a80fdc..f6a561734 100644
+index 99f446001..13a900ee7 100644
 --- a/packages/app/src/components/ui/tooltip.tsx
 +++ b/packages/app/src/components/ui/tooltip.tsx
 @@ -28,7 +28,8 @@ import { StyleSheet } from "react-native-unistyles";
@@ -543,7 +543,7 @@ index 697a80fdc..f6a561734 100644
  
    // Remove the portal in the inactive commit, before the retained chat freezes.
 diff --git a/packages/app/src/components/welcome-screen.tsx b/packages/app/src/components/welcome-screen.tsx
-index 1b3cdbe23..ee889c4f3 100644
+index 1231c0c9d..49ea94d2d 100644
 --- a/packages/app/src/components/welcome-screen.tsx
 +++ b/packages/app/src/components/welcome-screen.tsx
 @@ -23,9 +23,9 @@ import { formatVersionWithPrefix } from "@/desktop/updates/desktop-updates";
@@ -670,7 +670,7 @@ index 4c8d04e2f..8239ed8c6 100644
  import { createAudioEngine } from "@/audio";
  import type { AudioEngine } from "@/audio";
 diff --git a/packages/app/src/git/pull-request-panel/pane.tsx b/packages/app/src/git/pull-request-panel/pane.tsx
-index 429dd2be0..be88104cf 100644
+index 1f36a8749..5e554b16a 100644
 --- a/packages/app/src/git/pull-request-panel/pane.tsx
 +++ b/packages/app/src/git/pull-request-panel/pane.tsx
 @@ -35,7 +35,7 @@ import { useSessionStore } from "@/stores/session-store";
@@ -1602,7 +1602,7 @@ index 000000000..3b8e724aa
 +  return (isNative && !isFdroidBuild) || getSystemQrScanner() !== null;
 +}
 diff --git a/packages/app/src/screens/workspace/workspace-desktop-tabs-row.tsx b/packages/app/src/screens/workspace/workspace-desktop-tabs-row.tsx
-index f7645ac16..7a36cd72d 100644
+index bf957a27d..e8e6cc369 100644
 --- a/packages/app/src/screens/workspace/workspace-desktop-tabs-row.tsx
 +++ b/packages/app/src/screens/workspace/workspace-desktop-tabs-row.tsx
 @@ -36,6 +36,7 @@ import type {
@@ -1625,7 +1625,7 @@ index f7645ac16..7a36cd72d 100644
      ? ({
          onPointerDown: (event: { stopPropagation?: () => void }) => {
 diff --git a/packages/app/src/screens/workspace/workspace-screen.tsx b/packages/app/src/screens/workspace/workspace-screen.tsx
-index 0b1cfe07a..a4720fa74 100644
+index dd806e1fa..f719f939c 100644
 --- a/packages/app/src/screens/workspace/workspace-screen.tsx
 +++ b/packages/app/src/screens/workspace/workspace-screen.tsx
 @@ -32,7 +32,7 @@ import {
@@ -1637,7 +1637,7 @@ index 0b1cfe07a..a4720fa74 100644
  import { useQueryClient } from "@tanstack/react-query";
  import { useRouter, type Href } from "expo-router";
  import * as Clipboard from "expo-clipboard";
-@@ -223,6 +223,7 @@ import {
+@@ -222,6 +222,7 @@ import {
    type WorkspaceFileOpenRequest,
  } from "@/workspace/file-open";
  import { RenderProfile } from "@/utils/render-profiler";
@@ -1645,7 +1645,7 @@ index 0b1cfe07a..a4720fa74 100644
  import { useWorkspaceCheckoutStatus } from "@/screens/workspace/use-workspace-checkout-status";
  import { useWorkspacePullRequestDiscovery } from "@/panels/pull-request";
  
-@@ -1287,16 +1288,15 @@ function WorkspaceScreenContent({
+@@ -1271,16 +1272,15 @@ function WorkspaceScreenContent({
      // Back dismisses the compact overlay only. On a wide native layout the
      // explorer is a tab, `showMobileAgent` has no rendered consumer, and
      // returning true would swallow Back with nothing to show for it.
@@ -1800,11 +1800,11 @@ index 000000000..65690d168
 +
 +assertCoversExports<typeof Base, typeof import("./os-notifications.harmony")>();
 diff --git a/packages/app/src/workspace-labels/manager-modal.tsx b/packages/app/src/workspace-labels/manager-modal.tsx
-index a23e7e092..2091bdc03 100644
+index 8b0905dd1..ceb885882 100644
 --- a/packages/app/src/workspace-labels/manager-modal.tsx
 +++ b/packages/app/src/workspace-labels/manager-modal.tsx
 @@ -20,7 +20,7 @@ import { Button } from "@/components/ui/button";
- import type { FieldControlSize } from "@/components/ui/control-geometry";
+ import type { ControlSize } from "@/components/ui/control-geometry";
  import { Field, FormTextInput } from "@/components/ui/form-field";
  import { useIsCompactFormFactor } from "@/constants/layout";
 -import { isNative } from "@/constants/platform";
@@ -1812,7 +1812,7 @@ index a23e7e092..2091bdc03 100644
  import { useHosts } from "@/runtime/host-runtime";
  import type { Theme } from "@/styles/theme";
  import { confirmDialog } from "@/utils/confirm-dialog";
-@@ -251,7 +251,8 @@ function WorkspaceLabelManagerRow({
+@@ -249,7 +249,8 @@ function WorkspaceLabelManagerRow({
    const handlePointerEnter = useCallback(() => setIsHovered(true), []);
    const handlePointerLeave = useCallback(() => setIsHovered(false), []);
    const edit = useCallback(() => onEdit(label), [label, onEdit]);
@@ -1822,3 +1822,6 @@ index a23e7e092..2091bdc03 100644
    const editStyle = useCallback(
      ({ pressed }: PressableStateCallbackType) => [
        styles.rowEdit,
+-- 
+2.50.1 (Apple Git-155)
+
