@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Vincent Leon <leon@mbp.com>
 Date: Fri, 23 Oct 2026 18:11:45 +0800
-Subject: [PATCH 07/14] feat(harmony): run the web app inside the HarmonyOS
+Subject: [PATCH 07/15] feat(harmony): run the web app inside the HarmonyOS
  shell
 
 The HarmonyOS app is an ArkWeb shell (paseo-harmony) around this web build.
@@ -28,9 +28,7 @@ The background connection's start and stop become awaitable, because the
 shell answers asynchronously.
 ---
  packages/app/src/app/_layout.tsx              |   2 +
- packages/app/src/app/pair-scan.tsx            |  75 +++++-
  .../src/appearance/system-bars.harmony.tsx    |  39 +++
- .../src/components/add-host-method-modal.tsx  |   5 +-
  .../app/src/components/attachment-pill.tsx    |   5 +-
  .../src/components/highlighted-code-block.tsx |   6 +-
  packages/app/src/components/message.tsx       |  12 +-
@@ -38,7 +36,6 @@ shell answers asynchronously.
  .../src/components/sidebar-workspace-list.tsx |   7 +-
  .../sidebar/sidebar-section-header.tsx        |   5 +-
  .../sidebar/sidebar-status-list.tsx           |   4 +-
- .../sidebar/sidebar-workspace-row.tsx         |   5 +-
  .../back-press.harmony.ts                     |  13 +
  packages/app/src/components/ui/tooltip.tsx    |   6 +-
  .../app/src/components/welcome-screen.tsx     |  95 ++++---
@@ -53,6 +50,8 @@ shell answers asynchronously.
  packages/app/src/harmony/notifications.ts     |  72 ++++++
  packages/app/src/harmony/variant.ts           |  10 +
  packages/app/src/harmony/visibility.ts        |  63 +++++
+ .../internal/add-host-method-modal.tsx        |   5 +-
+ .../app/src/hosts/add-host/internal/scan.tsx  |  74 +++++-
  .../src/hosts/system-qr-scanner.harmony.ts    |  21 ++
  packages/app/src/hosts/system-qr-scanner.ts   |  18 ++
  .../workspace/workspace-desktop-tabs-row.tsx  |   5 +-
@@ -64,7 +63,7 @@ shell answers asynchronously.
  .../src/utils/open-external-url.harmony.ts    |  16 ++
  .../app/src/utils/os-notifications.harmony.ts |  24 ++
  .../src/workspace-labels/manager-modal.tsx    |   5 +-
- 37 files changed, 1142 insertions(+), 85 deletions(-)
+ 36 files changed, 1138 insertions(+), 83 deletions(-)
  create mode 100644 packages/app/src/appearance/system-bars.harmony.tsx
  create mode 100644 packages/app/src/components/ui/isolated-bottom-sheet-modal/back-press.harmony.ts
  create mode 100644 packages/app/src/harmony/back.ts
@@ -84,10 +83,10 @@ shell answers asynchronously.
  create mode 100644 packages/app/src/utils/os-notifications.harmony.ts
 
 diff --git a/packages/app/src/app/_layout.tsx b/packages/app/src/app/_layout.tsx
-index 298178477..e62c686ab 100644
+index c9d9bf4eb..586a41552 100644
 --- a/packages/app/src/app/_layout.tsx
 +++ b/packages/app/src/app/_layout.tsx
-@@ -94,6 +94,7 @@ import { KeyboardShiftProvider } from "@/keyboard/shift";
+@@ -111,6 +111,7 @@ import { KeyboardShiftProvider } from "@/keyboard/shift";
  import { useCompactWebViewportZoomLock } from "@/hooks/use-compact-web-viewport-zoom-lock";
  import { useOpenProject } from "@/hooks/use-open-project";
  import { useAppSettings } from "@/hooks/use-settings";
@@ -95,7 +94,7 @@ index 298178477..e62c686ab 100644
  import { useOpenAgentListGesture } from "@/mobile-panels/gestures";
  import { MobilePanelsProvider, useIsMobilePanelActive } from "@/mobile-panels/provider";
  import {
-@@ -615,6 +616,7 @@ function ProvidersWrapper({ children }: { children: ReactNode }) {
+@@ -700,6 +701,7 @@ function ProvidersWrapper({ children }: { children: ReactNode }) {
      <AppearanceProvider>
        <VoiceProvider>
          <DesktopWindowControlsSync />
@@ -103,110 +102,6 @@ index 298178477..e62c686ab 100644
          <OfferLinkListener />
          <HostSessionManager />
          <FaviconStatusSync />
-diff --git a/packages/app/src/app/pair-scan.tsx b/packages/app/src/app/pair-scan.tsx
-index 5d352140e..0acb80747 100644
---- a/packages/app/src/app/pair-scan.tsx
-+++ b/packages/app/src/app/pair-scan.tsx
-@@ -1,4 +1,4 @@
--import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
-+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
- import { useTranslation } from "react-i18next";
- import { Pressable, Text, View } from "react-native";
- import { useLocalSearchParams, useRouter, type Href } from "expo-router";
-@@ -8,6 +8,7 @@ import { CameraView, useCameraPermissions } from "expo-camera";
- import type { BarcodeScanningResult, BarcodeSettings } from "expo-camera";
- import { getHostRuntimeStore } from "@/runtime/host-runtime";
- import { openPairScan } from "@/hosts/pair-scan-model";
-+import { getSystemQrScanner } from "@/hosts/system-qr-scanner";
- import { buildHostRootRoute, buildSettingsHostRoute } from "@/utils/host-routes";
- import { isWeb } from "@/constants/platform";
- import { BackHeader } from "@/components/headers/back-header";
-@@ -169,6 +170,37 @@ export default function PairScanScreen() {
-     [scan],
-   );
- 
-+  // The HarmonyOS shell scans with the system scanner, which covers the app while it is up. Each
-+  // scanning state opens it once; backing out of it leaves this screen.
-+  const [systemQrScanner] = useState(getSystemQrScanner);
-+  const [systemScanRejected, setSystemScanRejected] = useState(false);
-+  const systemScanInFlight = useRef(false);
-+  useEffect(() => {
-+    if (!systemQrScanner || scanState.status !== "scanning" || systemScanRejected) return;
-+    if (systemScanInFlight.current) return;
-+    systemScanInFlight.current = true;
-+    void systemQrScanner()
-+      .then((value) => {
-+        if (value === null) {
-+          closeToSource();
-+          return;
-+        }
-+        scan.scan(value);
-+        // The model ignores anything that is not a pairing link, as the camera does frame by
-+        // frame; here there is no next frame, so say so.
-+        if (scan.getState().status === "scanning") setSystemScanRejected(true);
-+        return;
-+      })
-+      .catch(() => setSystemScanRejected(true))
-+      .finally(() => {
-+        systemScanInFlight.current = false;
-+      });
-+  }, [closeToSource, scan, scanState.status, systemQrScanner, systemScanRejected]);
-+  const handleSystemScanAgain = useCallback(() => {
-+    setSystemScanRejected(false);
-+    scan.scanAgain();
-+  }, [scan]);
-+
-   const handleRouterBack = useCallback(() => router.back(), [router]);
-   const savePasswordPairing = useCallback(
-     ({ serverId }: { serverId: string }) => navigateToPairedHost(serverId),
-@@ -187,6 +219,47 @@ export default function PairScanScreen() {
-     [theme.colors.foreground],
-   );
- 
-+  if (isWeb && systemQrScanner) {
-+    const attemptEnded = systemScanRejected || scanState.status === "stopped";
-+    return (
-+      <View style={styles.container}>
-+        <BackHeader title={t("pairing.scan.title")} onBack={handleRouterBack} />
-+        <View style={bodyStyle}>
-+          {scanState.status === "pairing" ? (
-+            <Text style={helperTextStyle}>{t("pairing.scan.pairing")}</Text>
-+          ) : null}
-+          {attemptEnded ? (
-+            <View style={styles.permissionCard}>
-+              {systemScanRejected ? (
-+                <Text style={styles.permissionBody}>{t("pairing.link.errors.invalid")}</Text>
-+              ) : null}
-+              {scanState.status === "stopped" && scanState.error ? (
-+                <Text style={styles.permissionBody}>{scanState.error}</Text>
-+              ) : null}
-+              <Pressable
-+                style={styles.permissionButton}
-+                onPress={handleSystemScanAgain}
-+                testID="pair-scan-again"
-+              >
-+                <Text style={styles.permissionButtonText}>
-+                  {t("pairing.connectionMethods.scanQr.title")}
-+                </Text>
-+              </Pressable>
-+            </View>
-+          ) : null}
-+        </View>
-+        <PairLinkModal
-+          visible={scanState.status === "passwordRequired"}
-+          passwordRequired={
-+            scanState.status === "passwordRequired" ? scanState.passwordRequired : undefined
-+          }
-+          onClose={scan.closePassword}
-+          onSaved={savePasswordPairing}
-+        />
-+      </View>
-+    );
-+  }
-+
-   if (isWeb) {
-     return (
-       <View style={styles.container}>
 diff --git a/packages/app/src/appearance/system-bars.harmony.tsx b/packages/app/src/appearance/system-bars.harmony.tsx
 new file mode 100644
 index 000000000..f2693bf5b
@@ -252,31 +147,8 @@ index 000000000..f2693bf5b
 +}));
 +
 +assertCoversExports<typeof Base, typeof import("./system-bars.harmony")>();
-diff --git a/packages/app/src/components/add-host-method-modal.tsx b/packages/app/src/components/add-host-method-modal.tsx
-index b97c529be..ac3c8c80a 100644
---- a/packages/app/src/components/add-host-method-modal.tsx
-+++ b/packages/app/src/components/add-host-method-modal.tsx
-@@ -4,8 +4,7 @@ import { Pressable, Text, View } from "react-native";
- import { StyleSheet, withUnistyles } from "react-native-unistyles";
- import { QrCode, Link2, ClipboardPaste, Terminal } from "lucide-react-native";
- import { AdaptiveModalSheet, type SheetHeader } from "./adaptive-modal-sheet";
--import { isFdroidBuild } from "@/constants/build-profile";
--import { isNative } from "@/constants/platform";
-+import { canScanPairingQr } from "@/hosts/system-qr-scanner";
- import { isElectronRuntime } from "@/desktop/host";
- import type { Theme } from "@/styles/theme";
- 
-@@ -118,7 +117,7 @@ export function AddHostMethodModal({
-         </Pressable>
-       ) : null}
- 
--      {isNative && !isFdroidBuild ? (
-+      {canScanPairingQr() ? (
-         <Pressable
-           style={styles.option}
-           onPress={handleScan}
 diff --git a/packages/app/src/components/attachment-pill.tsx b/packages/app/src/components/attachment-pill.tsx
-index 4bf702252..ffcf6021f 100644
+index aaa59e067..f07184adb 100644
 --- a/packages/app/src/components/attachment-pill.tsx
 +++ b/packages/app/src/components/attachment-pill.tsx
 @@ -2,7 +2,7 @@ import { type ReactNode, useCallback, useMemo, useState } from "react";
@@ -284,7 +156,7 @@ index 4bf702252..ffcf6021f 100644
  import { StyleSheet, withUnistyles } from "react-native-unistyles";
  import { X } from "lucide-react-native";
 -import { isNative } from "@/constants/platform";
-+import { useHasFinePointer } from "@/hooks/use-fine-pointer";
++import { usePointerCapabilities } from "@/hooks/pointer-capabilities";
  import { useIsCompactFormFactor } from "@/constants/layout";
  import type { AttachmentMetadata } from "@/attachments/types";
  import { useAttachmentPreviewUrl } from "@/attachments/use-attachment-preview-url";
@@ -293,13 +165,13 @@ index 4bf702252..ffcf6021f 100644
    const [isBodyHovered, setIsBodyHovered] = useState(false);
    const [isCloseHovered, setIsCloseHovered] = useState(false);
 -  const alwaysShow = isNative || isCompact;
-+  const hasFinePointer = useHasFinePointer();
++  const { finePointer: hasFinePointer } = usePointerCapabilities();
 +  const alwaysShow = !hasFinePointer || isCompact;
    const showRemove = alwaysShow || isBodyHovered || isCloseHovered;
    const closeButtonStyle = useMemo(
      () => [styles.closeButton, !showRemove && styles.closeButtonHidden],
 diff --git a/packages/app/src/components/highlighted-code-block.tsx b/packages/app/src/components/highlighted-code-block.tsx
-index 292ec5361..2886b85cf 100644
+index 9b7939daf..4c1ef468e 100644
 --- a/packages/app/src/components/highlighted-code-block.tsx
 +++ b/packages/app/src/components/highlighted-code-block.tsx
 @@ -12,7 +12,8 @@ import * as Clipboard from "expo-clipboard";
@@ -308,49 +180,49 @@ index 292ec5361..2886b85cf 100644
  import type { HighlightToken } from "@getpaseo/highlight";
 -import { isNative, isWeb } from "@/constants/platform";
 +import { isWeb } from "@/constants/platform";
-+import { useHasFinePointer } from "@/hooks/use-fine-pointer";
++import { usePointerCapabilities } from "@/hooks/pointer-capabilities";
  import { useIsCompactFormFactor } from "@/constants/layout";
  import { syntaxTokenStyleFor } from "@/styles/syntax-token-styles";
  import { CODE_SURFACE_DATASET } from "@/styles/code-surface";
-@@ -88,7 +89,8 @@ export const HighlightedCodeBlock = React.memo(function HighlightedCodeBlock({
+@@ -89,7 +90,8 @@ export const HighlightedCodeBlock = React.memo(function HighlightedCodeBlock({
    const [isHovered, setIsHovered] = useState(false);
    const handlePointerEnter = useCallback(() => setIsHovered(true), []);
    const handlePointerLeave = useCallback(() => setIsHovered(false), []);
 -  const controlsVisible = isHovered || isNative || isCompact;
-+  const hasFinePointer = useHasFinePointer();
++  const { finePointer: hasFinePointer } = usePointerCapabilities();
 +  const controlsVisible = isHovered || !hasFinePointer || isCompact;
    // Copy the code without its trailing blank lines. A fence body ends in a newline,
    // and ends in more than one when the author left a blank line before the closing
    // fence; pasting any of them into a terminal runs the last line.
 diff --git a/packages/app/src/components/message.tsx b/packages/app/src/components/message.tsx
-index 77b7f4616..5e826d87f 100644
+index d10197257..8640f1c10 100644
 --- a/packages/app/src/components/message.tsx
 +++ b/packages/app/src/components/message.tsx
-@@ -16,6 +16,7 @@ import { TaskListRow } from "@/components/task-list-row";
+@@ -17,6 +17,7 @@ import { TaskListRow } from "@/components/task-list-row";
  import { LoadingSpinner } from "@/components/ui/loading-spinner";
  import { useIsCompactFormFactor } from "@/constants/layout";
  import { isNative, isWeb } from "@/constants/platform";
-+import { useHasFinePointer } from "@/hooks/use-fine-pointer";
++import { usePointerCapabilities } from "@/hooks/pointer-capabilities";
  import { useRevealedText, type MarkdownPhase } from "@/hooks/use-revealed-text";
  import { ICON_SIZE, type Theme } from "@/styles/theme";
  import { inlineUnistylesStyle } from "@/styles/unistyles-inline-style";
-@@ -418,7 +419,8 @@ export const UserMessage = memo(function UserMessage({
+@@ -422,7 +423,8 @@ export const UserMessage = memo(function UserMessage({
    const hasText = message.trim().length > 0;
    const hasImages = images.length > 0;
    const hasAttachments = attachments.length > 0;
 -  const showTrailingRow = !isPending && hasText && (isCompact || isNative || isHovered);
-+  const hasFinePointer = useHasFinePointer();
++  const { finePointer: hasFinePointer } = usePointerCapabilities();
 +  const showTrailingRow = !isPending && hasText && (isCompact || !hasFinePointer || isHovered);
    const formattedTimestamp = useMemo(
      () => formatMessageTimestamp(new Date(timestamp)),
      [timestamp],
-@@ -623,12 +625,14 @@ export const AssistantTurnFooter = memo(function AssistantTurnFooter({
+@@ -640,12 +642,14 @@ export const AssistantTurnFooter = memo(function AssistantTurnFooter({
  
    const primaryLabel = durationLabel || timestampLabel;
    const canSwap = Boolean(durationLabel && timestampLabel);
 -  const showTimestamp = canSwap && (isWeb ? hovered : pressedReveal);
 +  // A touch screen has no hover to reveal the timestamp with, so a tap does it, as on native.
-+  const hasFinePointer = useHasFinePointer();
++  const { finePointer: hasFinePointer } = usePointerCapabilities();
 +  const showTimestamp = canSwap && (hasFinePointer ? hovered : pressedReveal);
  
    const handleHoverIn = useCallback(() => setHovered(true), []);
@@ -361,7 +233,7 @@ index 77b7f4616..5e826d87f 100644
      if (revealTimerRef.current) {
        clearTimeout(revealTimerRef.current);
      }
-@@ -637,7 +641,7 @@ export const AssistantTurnFooter = memo(function AssistantTurnFooter({
+@@ -654,7 +658,7 @@ export const AssistantTurnFooter = memo(function AssistantTurnFooter({
        setPressedReveal(false);
        revealTimerRef.current = null;
      }, TIMESTAMP_REVEAL_MS);
@@ -371,36 +243,36 @@ index 77b7f4616..5e826d87f 100644
      (target: AssistantForkTarget) => {
        return onFork?.(target);
 diff --git a/packages/app/src/components/model-browser.tsx b/packages/app/src/components/model-browser.tsx
-index ec1a26a1d..e9bbd23e8 100644
+index 70a0a9745..8e3abe49d 100644
 --- a/packages/app/src/components/model-browser.tsx
 +++ b/packages/app/src/components/model-browser.tsx
 @@ -42,6 +42,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
  import { useProviderIcon } from "@/components/provider-icons";
  import { useIsCompactFormFactor } from "@/constants/layout";
  import { isNative, isWeb } from "@/constants/platform";
-+import { useHasFinePointer } from "@/hooks/use-fine-pointer";
++import { usePointerCapabilities } from "@/hooks/pointer-capabilities";
  import {
    buildProviderQualifiedDescription,
    buildSelectedTriggerLabel,
-@@ -624,7 +625,8 @@ function ModelRowProfileAction({
+@@ -655,7 +656,8 @@ function ModelRowProfileAction({
    children: React.ReactNode;
  }) {
    const isCompact = useIsCompactFormFactor();
 -  const visible = hovered || isNative || isCompact;
-+  const hasFinePointer = useHasFinePointer();
++  const { finePointer: hasFinePointer } = usePointerCapabilities();
 +  const visible = hovered || !hasFinePointer || isCompact;
    const pressableStyle = useCallback(
      ({ hovered: buttonHovered, pressed }: PressableStateCallbackType & { hovered?: boolean }) => [
        styles.rowIconButton,
 diff --git a/packages/app/src/components/sidebar-workspace-list.tsx b/packages/app/src/components/sidebar-workspace-list.tsx
-index 8697a4b27..908e03127 100644
+index 8b7489f5f..e14f9183d 100644
 --- a/packages/app/src/components/sidebar-workspace-list.tsx
 +++ b/packages/app/src/components/sidebar-workspace-list.tsx
 @@ -147,6 +147,7 @@ import {
    isNative as platformIsNative,
    getIsElectron,
  } from "@/constants/platform";
-+import { useHasFinePointer } from "@/hooks/use-fine-pointer";
++import { usePointerCapabilities } from "@/hooks/pointer-capabilities";
  import { getDesktopHost } from "@/desktop/host";
  import { OpenInFileManagerMenuItem } from "@/workspace/open-in-file-manager/menu-item";
  import { useLocalDaemonServerId } from "@/hooks/use-is-local-daemon";
@@ -409,43 +281,43 @@ index 8697a4b27..908e03127 100644
    removeProjectStatus: "idle" | "pending" | "success";
  }) {
 -  const actionsVisible = isHovered || platformIsNative || isMobileBreakpoint;
-+  const hasFinePointer = useHasFinePointer();
++  const { finePointer: hasFinePointer } = usePointerCapabilities();
 +  const actionsVisible = isHovered || !hasFinePointer || isMobileBreakpoint;
    return (
      <View style={styles.projectTrailingActions}>
        {worktreeTarget ? (
-@@ -1080,7 +1082,8 @@ function WorkspaceRowInner({
+@@ -1078,7 +1080,8 @@ function WorkspaceRowInner({
  }: WorkspaceRowInnerProps) {
    const isCompact = useIsCompactFormFactor();
-   const [isPressed, setIsPressed] = useState(false);
+   const [isHighlighted, setIsHighlighted] = useState(false);
 -  const isTouchPlatform = platformIsNative || isCompact;
-+  const hasFinePointer = useHasFinePointer();
++  const { finePointer: hasFinePointer } = usePointerCapabilities();
 +  const isTouchPlatform = !hasFinePointer || isCompact;
    const interaction = useLongPressDragInteraction({
      drag,
      menuController,
 diff --git a/packages/app/src/components/sidebar/sidebar-section-header.tsx b/packages/app/src/components/sidebar/sidebar-section-header.tsx
-index 7a959435b..dce656779 100644
+index e0580fa4d..fac6e7f03 100644
 --- a/packages/app/src/components/sidebar/sidebar-section-header.tsx
 +++ b/packages/app/src/components/sidebar/sidebar-section-header.tsx
-@@ -4,7 +4,7 @@ import { Pressable, Text, View } from "react-native";
+@@ -5,7 +5,7 @@ import { Text, View } from "react-native";
  import { StyleSheet } from "react-native-unistyles";
  import { DensityIcon } from "@/components/ui/density-icon";
  import { useIsCompactFormFactor } from "@/constants/layout";
 -import { isNative } from "@/constants/platform";
-+import { useHasFinePointer } from "@/hooks/use-fine-pointer";
++import { usePointerCapabilities } from "@/hooks/pointer-capabilities";
  import { density } from "@/styles/density";
  
  /** A sidebar section label such as "Pinned" or "Workspaces". A section with `onToggle`
-@@ -53,6 +53,7 @@ function CollapsibleTitle({
+@@ -54,6 +54,7 @@ function CollapsibleTitle({
    testID?: string;
  }) {
    const isCompact = useIsCompactFormFactor();
-+  const hasFinePointer = useHasFinePointer();
++  const { finePointer: hasFinePointer } = usePointerCapabilities();
    const accessibilityState = useMemo(() => ({ expanded: !collapsed }), [collapsed]);
  
    return (
-@@ -66,7 +67,7 @@ function CollapsibleTitle({
+@@ -67,7 +68,7 @@ function CollapsibleTitle({
        {({ hovered }) => (
          <>
            <Text style={styles.title}>{title}</Text>
@@ -455,50 +327,27 @@ index 7a959435b..dce656779 100644
                icon={collapsed ? ChevronRight : ChevronDown}
                size="xs"
 diff --git a/packages/app/src/components/sidebar/sidebar-status-list.tsx b/packages/app/src/components/sidebar/sidebar-status-list.tsx
-index edb295324..a0ac4a667 100644
+index 729674994..5fe75ce6c 100644
 --- a/packages/app/src/components/sidebar/sidebar-status-list.tsx
 +++ b/packages/app/src/components/sidebar/sidebar-status-list.tsx
-@@ -27,6 +27,7 @@ import type { SidebarWorkspaceGroup } from "@/components/sidebar/sidebar-labels"
+@@ -21,6 +21,7 @@ import type { SidebarWorkspaceGroup } from "@/components/sidebar/sidebar-labels"
  import { SidebarFilterEmptyState } from "@/components/sidebar/empty-states";
  import type { HostBadgeModel } from "@/hosts/appearance";
  import { isWeb as platformIsWeb, isNative as platformIsNative } from "@/constants/platform";
-+import { useHasFinePointer } from "@/hooks/use-fine-pointer";
++import { usePointerCapabilities } from "@/hooks/pointer-capabilities";
  import { useIsCompactFormFactor } from "@/constants/layout";
  import { StyleSheet } from "react-native-unistyles";
  import { density, densityIconBox, densityIconProps } from "@/styles/density";
-@@ -929,7 +930,8 @@ function StatusWorkspaceRowInnerContent({
+@@ -928,7 +929,8 @@ function StatusWorkspaceRowInnerContent({
    dragInteraction?: ReturnType<typeof useLongPressDragInteraction>;
  }) {
    const isCompact = useIsCompactFormFactor();
 -  const isTouchPlatform = platformIsNative || isCompact;
-+  const hasFinePointer = useHasFinePointer();
++  const { finePointer: hasFinePointer } = usePointerCapabilities();
 +  const isTouchPlatform = !hasFinePointer || isCompact;
-   const [isPressed, setIsPressed] = useState(false);
+   const [isHighlighted, setIsHighlighted] = useState(false);
    const trailing = useSidebarWorkspaceTrailing();
    const {
-diff --git a/packages/app/src/components/sidebar/sidebar-workspace-row.tsx b/packages/app/src/components/sidebar/sidebar-workspace-row.tsx
-index 2488e7956..1191ce647 100644
---- a/packages/app/src/components/sidebar/sidebar-workspace-row.tsx
-+++ b/packages/app/src/components/sidebar/sidebar-workspace-row.tsx
-@@ -17,7 +17,7 @@ import { useShortcutKeys } from "@/hooks/use-shortcut-keys";
- import { useKeyboardActionHandler } from "@/hooks/use-keyboard-action-handler";
- import { useWorkspaceReadState } from "@/hooks/use-workspace-read-state";
- import { redirectIfArchivingActiveWorkspace } from "@/utils/sidebar-workspace-archive-redirect";
--import { isNative as platformIsNative } from "@/constants/platform";
-+import { useHasFinePointer } from "@/hooks/use-fine-pointer";
- import { useIsCompactFormFactor } from "@/constants/layout";
- import { useLongPressDragInteraction } from "@/components/sidebar/use-long-press-drag-interaction";
- import {
-@@ -232,7 +232,8 @@ function WorkspaceRowBody({
-   archiveShortcutKeys,
- }: WorkspaceRowBodyProps) {
-   const isCompact = useIsCompactFormFactor();
--  const isTouchPlatform = platformIsNative || isCompact;
-+  const hasFinePointer = useHasFinePointer();
-+  const isTouchPlatform = !hasFinePointer || isCompact;
-   const [isPressed, setIsPressed] = useState(false);
-   const trailing = useSidebarWorkspaceTrailing();
-   const draggable = Boolean(drag);
 diff --git a/packages/app/src/components/ui/isolated-bottom-sheet-modal/back-press.harmony.ts b/packages/app/src/components/ui/isolated-bottom-sheet-modal/back-press.harmony.ts
 new file mode 100644
 index 000000000..c8301147c
@@ -519,7 +368,7 @@ index 000000000..c8301147c
 +
 +assertCoversExports<typeof Base, typeof import("./back-press.harmony")>();
 diff --git a/packages/app/src/components/ui/tooltip.tsx b/packages/app/src/components/ui/tooltip.tsx
-index 99f446001..13a900ee7 100644
+index 71ac53d8a..0d31fc2eb 100644
 --- a/packages/app/src/components/ui/tooltip.tsx
 +++ b/packages/app/src/components/ui/tooltip.tsx
 @@ -28,7 +28,8 @@ import { StyleSheet } from "react-native-unistyles";
@@ -528,25 +377,25 @@ index 99f446001..13a900ee7 100644
  import { useRetainedPanelActive } from "@/components/retained-panel";
 -import { isNative, isWeb } from "@/constants/platform";
 +import { isWeb } from "@/constants/platform";
-+import { useHasFinePointer } from "@/hooks/use-fine-pointer";
++import { usePointerCapabilities } from "@/hooks/pointer-capabilities";
  import { getOverlayRoot, OVERLAY_Z } from "@/lib/overlay-root";
+ import { holdSurfaceEdge, surfaceFrameStyles, type SurfacePosition } from "./anchor";
  
- type Side = "top" | "bottom" | "left" | "right";
-@@ -258,7 +259,8 @@ export function Tooltip({
+@@ -259,7 +260,8 @@ export function Tooltip({
  
    const isCompact = useIsCompactFormFactor();
    const active = useRetainedPanelActive();
 -  const opensOnPress = isNative || isCompact;
-+  const hasFinePointer = useHasFinePointer();
++  const { finePointer: hasFinePointer } = usePointerCapabilities();
 +  const opensOnPress = !hasFinePointer || isCompact;
    const enabled = active && (opensOnPress ? enabledOnMobile : enabledOnDesktop);
  
    // Remove the portal in the inactive commit, before the retained chat freezes.
 diff --git a/packages/app/src/components/welcome-screen.tsx b/packages/app/src/components/welcome-screen.tsx
-index 1231c0c9d..49ea94d2d 100644
+index 6dd1a1426..a150c26ed 100644
 --- a/packages/app/src/components/welcome-screen.tsx
 +++ b/packages/app/src/components/welcome-screen.tsx
-@@ -23,9 +23,9 @@ import { formatVersionWithPrefix } from "@/desktop/updates/desktop-updates";
+@@ -20,9 +20,9 @@ import { formatVersionWithPrefix } from "@/desktop/updates/desktop-updates";
  import { buildOpenProjectRoute } from "@/utils/host-routes";
  import { PaseoLogo } from "@/components/icons/paseo-logo";
  import { openExternalUrl } from "@/utils/open-external-url";
@@ -558,9 +407,9 @@ index 1231c0c9d..49ea94d2d 100644
  
  interface WelcomeAction {
    key: "scan-qr" | "direct-connection" | "remote-ssh" | "paste-pairing-link";
-@@ -214,52 +214,51 @@ export function WelcomeScreen({ onHostAdded }: WelcomeScreenProps) {
-     [onHostAdded, finishOnboarding],
-   );
+@@ -191,52 +191,51 @@ export function WelcomeScreen() {
+   const handleOpenPasteLink = useAddHost({ method: "link", onAdded: finishOnboarding });
+   const handleScanQr = useAddHost({ method: "scan", onAdded: finishOnboarding });
  
 -  const actions: WelcomeAction[] =
 -    isWeb || isFdroidBuild
@@ -670,7 +519,7 @@ index 4c8d04e2f..8239ed8c6 100644
  import { createAudioEngine } from "@/audio";
  import type { AudioEngine } from "@/audio";
 diff --git a/packages/app/src/git/pull-request-panel/pane.tsx b/packages/app/src/git/pull-request-panel/pane.tsx
-index 1f36a8749..5e554b16a 100644
+index ff2b9c868..c45684301 100644
 --- a/packages/app/src/git/pull-request-panel/pane.tsx
 +++ b/packages/app/src/git/pull-request-panel/pane.tsx
 @@ -35,7 +35,7 @@ import { useSessionStore } from "@/stores/session-store";
@@ -678,16 +527,16 @@ index 1f36a8749..5e554b16a 100644
  import { useToast } from "@/contexts/toast-context";
  import { useCheckoutGitActionsStore } from "@/git/actions-store";
 -import { isNative } from "@/constants/platform";
-+import { useHasFinePointer } from "@/hooks/use-fine-pointer";
++import { usePointerCapabilities } from "@/hooks/pointer-capabilities";
  import { useIsCompactFormFactor } from "@/constants/layout";
  import {
    PaneContentToolbar,
-@@ -668,7 +668,8 @@ function useRevealOnHover() {
+@@ -669,7 +669,8 @@ function useRevealOnHover() {
    const [menuOpen, setMenuOpen] = useState(false);
    const handlePointerEnter = useCallback(() => setIsHovered(true), []);
    const handlePointerLeave = useCallback(() => setIsHovered(false), []);
 -  const actionsVisible = isHovered || menuOpen || isNative || isCompact;
-+  const hasFinePointer = useHasFinePointer();
++  const { finePointer: hasFinePointer } = usePointerCapabilities();
 +  const actionsVisible = isHovered || menuOpen || !hasFinePointer || isCompact;
    return { actionsVisible, handlePointerEnter, handlePointerLeave, setMenuOpen };
  }
@@ -724,7 +573,7 @@ index 000000000..ce0f5dc02
 +}
 diff --git a/packages/app/src/harmony/host-sync.harmony.tsx b/packages/app/src/harmony/host-sync.harmony.tsx
 new file mode 100644
-index 000000000..cbea1e720
+index 000000000..f40de329a
 --- /dev/null
 +++ b/packages/app/src/harmony/host-sync.harmony.tsx
 @@ -0,0 +1,159 @@
@@ -732,7 +581,7 @@ index 000000000..cbea1e720
 +import { useEffect } from "react";
 +import { useRouter } from "expo-router";
 +import { parseAgentDeepLink } from "@getpaseo/protocol/agent-deep-link";
-+import { dispatchTopWebOverlayKeyDown } from "@/lib/overlay-root";
++import { dispatchTopOverlayKeyDown } from "@/keyboard";
 +import { getHostRuntimeStore } from "@/runtime/host-runtime";
 +import { buildOpenProjectRoute } from "@/utils/host-routes";
 +import { navigateToAgent } from "@/utils/navigate-to-agent";
@@ -827,7 +676,7 @@ index 000000000..cbea1e720
 + */
 +function handleBack(router: ReturnType<typeof useRouter>): boolean {
 +  const escape = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
-+  if (dispatchTopWebOverlayKeyDown(escape)) return true;
++  if (dispatchTopOverlayKeyDown(escape)) return true;
 +  if (runHarmonyBackHandlers()) return true;
 +  if (router.canGoBack()) {
 +    router.back();
@@ -1550,6 +1399,132 @@ index 000000000..97a146a6a
 +    },
 +  };
 +}
+diff --git a/packages/app/src/hosts/add-host/internal/add-host-method-modal.tsx b/packages/app/src/hosts/add-host/internal/add-host-method-modal.tsx
+index 35e61a5d1..bdac2f0f3 100644
+--- a/packages/app/src/hosts/add-host/internal/add-host-method-modal.tsx
++++ b/packages/app/src/hosts/add-host/internal/add-host-method-modal.tsx
+@@ -5,8 +5,7 @@ import { Text, View } from "react-native";
+ import { StyleSheet, withUnistyles } from "react-native-unistyles";
+ import { QrCode, Link2, ClipboardPaste, Terminal } from "lucide-react-native";
+ import { AdaptiveModalSheet, type SheetHeader } from "@/components/adaptive-modal-sheet";
+-import { isFdroidBuild } from "@/constants/build-profile";
+-import { isNative } from "@/constants/platform";
++import { canScanPairingQr } from "@/hosts/system-qr-scanner";
+ import { isElectronRuntime } from "@/desktop/host";
+ import type { Theme } from "@/styles/theme";
+ 
+@@ -119,7 +118,7 @@ export function AddHostMethodModal({
+         </PressHighlight>
+       ) : null}
+ 
+-      {isNative && !isFdroidBuild ? (
++      {canScanPairingQr() ? (
+         <PressHighlight
+           style={styles.option}
+           onPress={handleScan}
+diff --git a/packages/app/src/hosts/add-host/internal/scan.tsx b/packages/app/src/hosts/add-host/internal/scan.tsx
+index 1d96e326d..db214dcd4 100644
+--- a/packages/app/src/hosts/add-host/internal/scan.tsx
++++ b/packages/app/src/hosts/add-host/internal/scan.tsx
+@@ -1,4 +1,4 @@
+-import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
++import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+ import { useTranslation } from "react-i18next";
+ import { Text, View } from "react-native";
+ import { useSafeAreaInsets } from "react-native-safe-area-context";
+@@ -7,6 +7,7 @@ import { CameraView, useCameraPermissions } from "expo-camera";
+ import type { BarcodeScanningResult, BarcodeSettings } from "expo-camera";
+ import { getHostRuntimeStore } from "@/runtime/host-runtime";
+ import { openPairScan } from "./pair-scan-model";
++import { getSystemQrScanner } from "@/hosts/system-qr-scanner";
+ import { isWeb } from "@/constants/platform";
+ import { PairLinkModal } from "./pair-link-modal";
+ import { Button } from "@/components/ui/button";
+@@ -142,6 +143,37 @@ export function PairScanContent({
+     [scan],
+   );
+ 
++  // The HarmonyOS shell scans with the system scanner, which covers the app while it is up. Each
++  // scanning state opens it once; backing out of it leaves this screen.
++  const [systemQrScanner] = useState(getSystemQrScanner);
++  const [systemScanRejected, setSystemScanRejected] = useState(false);
++  const systemScanInFlight = useRef(false);
++  useEffect(() => {
++    if (!systemQrScanner || scanState.status !== "scanning" || systemScanRejected) return;
++    if (systemScanInFlight.current) return;
++    systemScanInFlight.current = true;
++    void systemQrScanner()
++      .then((value) => {
++        if (value === null) {
++          onClose();
++          return;
++        }
++        scan.scan(value);
++        // The model ignores anything that is not a pairing link, as the camera does frame by
++        // frame; here there is no next frame, so say so.
++        if (scan.getState().status === "scanning") setSystemScanRejected(true);
++        return;
++      })
++      .catch(() => setSystemScanRejected(true))
++      .finally(() => {
++        systemScanInFlight.current = false;
++      });
++  }, [onClose, scan, scanState.status, systemQrScanner, systemScanRejected]);
++  const handleSystemScanAgain = useCallback(() => {
++    setSystemScanRejected(false);
++    scan.scanAgain();
++  }, [scan]);
++
+   const savePasswordPairing = useCallback(
+     ({ serverId }: { serverId: string }) => onConnected(serverId),
+     [onConnected],
+@@ -155,6 +187,46 @@ export function PairScanContent({
+     [insets.bottom],
+   );
+ 
++  if (isWeb && systemQrScanner) {
++    const attemptEnded = systemScanRejected || scanState.status === "stopped";
++    return (
++      <View style={styles.container}>
++        <View style={bodyStyle}>
++          {scanState.status === "pairing" ? (
++            <Text style={styles.helperText}>{t("pairing.scan.pairing")}</Text>
++          ) : null}
++          {attemptEnded ? (
++            <View style={styles.permissionCard}>
++              {systemScanRejected ? (
++                <Text style={styles.permissionBody}>{t("pairing.link.errors.invalid")}</Text>
++              ) : null}
++              {scanState.status === "stopped" && scanState.error ? (
++                <Text style={styles.permissionBody}>{scanState.error}</Text>
++              ) : null}
++              <Button
++                style={styles.permissionButton}
++                onPress={handleSystemScanAgain}
++                testID="pair-scan-again"
++              >
++                <Text style={styles.permissionButtonText}>
++                  {t("pairing.connectionMethods.scanQr.title")}
++                </Text>
++              </Button>
++            </View>
++          ) : null}
++        </View>
++        <PairLinkModal
++          visible={scanState.status === "passwordRequired"}
++          passwordRequired={
++            scanState.status === "passwordRequired" ? scanState.passwordRequired : undefined
++          }
++          onClose={scan.closePassword}
++          onSaved={savePasswordPairing}
++        />
++      </View>
++    );
++  }
++
+   if (isWeb) {
+     return (
+       <View style={styles.container}>
 diff --git a/packages/app/src/hosts/system-qr-scanner.harmony.ts b/packages/app/src/hosts/system-qr-scanner.harmony.ts
 new file mode 100644
 index 000000000..bcd6cb9b7
@@ -1602,33 +1577,33 @@ index 000000000..3b8e724aa
 +  return (isNative && !isFdroidBuild) || getSystemQrScanner() !== null;
 +}
 diff --git a/packages/app/src/screens/workspace/workspace-desktop-tabs-row.tsx b/packages/app/src/screens/workspace/workspace-desktop-tabs-row.tsx
-index bf957a27d..e8e6cc369 100644
+index 3c138087c..b8c248c20 100644
 --- a/packages/app/src/screens/workspace/workspace-desktop-tabs-row.tsx
 +++ b/packages/app/src/screens/workspace/workspace-desktop-tabs-row.tsx
-@@ -36,6 +36,7 @@ import type {
+@@ -38,6 +38,7 @@ import type {
    DraggableRenderItemInfo,
  } from "@/components/draggable-list.types";
  import { isNative, isWeb } from "@/constants/platform";
-+import { useHasFinePointer } from "@/hooks/use-fine-pointer";
++import { usePointerCapabilities } from "@/hooks/pointer-capabilities";
  import {
    ContextMenu,
    ContextMenuContent,
-@@ -778,7 +779,9 @@ function TabChip({
+@@ -790,7 +791,9 @@ function TabChip({
      isActiveFocused,
      isFilled,
    });
 -  const showCloseControl = showCloseButton && (isHovered || isNative || isCompact || isClosingTab);
-+  const hasFinePointer = useHasFinePointer();
++  const { finePointer: hasFinePointer } = usePointerCapabilities();
 +  const showCloseControl =
 +    showCloseButton && (isHovered || !hasFinePointer || isCompact || isClosingTab);
    const closeButtonDragBlockers = isWeb
      ? ({
          onPointerDown: (event: { stopPropagation?: () => void }) => {
 diff --git a/packages/app/src/screens/workspace/workspace-screen.tsx b/packages/app/src/screens/workspace/workspace-screen.tsx
-index dd806e1fa..f719f939c 100644
+index 0c30fb5bf..df574e30e 100644
 --- a/packages/app/src/screens/workspace/workspace-screen.tsx
 +++ b/packages/app/src/screens/workspace/workspace-screen.tsx
-@@ -32,7 +32,7 @@ import {
+@@ -39,7 +39,7 @@ import {
  } from "react";
  import { useStoreWithEqualityFn } from "zustand/traditional";
  import { useIsFocused } from "expo-router/react-navigation";
@@ -1637,7 +1612,7 @@ index dd806e1fa..f719f939c 100644
  import { useQueryClient } from "@tanstack/react-query";
  import { useRouter, type Href } from "expo-router";
  import * as Clipboard from "expo-clipboard";
-@@ -222,6 +222,7 @@ import {
+@@ -235,6 +235,7 @@ import {
    type WorkspaceFileOpenRequest,
  } from "@/workspace/file-open";
  import { RenderProfile } from "@/utils/render-profiler";
@@ -1645,7 +1620,7 @@ index dd806e1fa..f719f939c 100644
  import { useWorkspaceCheckoutStatus } from "@/screens/workspace/use-workspace-checkout-status";
  import { useWorkspacePullRequestDiscovery } from "@/panels/pull-request";
  
-@@ -1271,16 +1272,15 @@ function WorkspaceScreenContent({
+@@ -1323,16 +1324,15 @@ function WorkspaceScreenContent({
      // Back dismisses the compact overlay only. On a wide native layout the
      // explorer is a tab, `showMobileAgent` has no rendered consumer, and
      // returning true would swallow Back with nothing to show for it.
@@ -1666,7 +1641,7 @@ index dd806e1fa..f719f939c 100644
  
    const workspaceLayout = useWorkspaceLayoutStore((state) =>
 diff --git a/packages/app/src/subagents/track.tsx b/packages/app/src/subagents/track.tsx
-index dd8c088e6..04a99690a 100644
+index dd8c088e6..ce8a9f84d 100644
 --- a/packages/app/src/subagents/track.tsx
 +++ b/packages/app/src/subagents/track.tsx
 @@ -10,7 +10,7 @@ import { ComposerTrackActions, ComposerTrackPill, ComposerTrackRow } from "@/com
@@ -1674,7 +1649,7 @@ index dd8c088e6..04a99690a 100644
  import { ToolbarButton, paneContentToolbarIconSize } from "@/components/ui/pane-content-toolbar";
  import { useIsCompactFormFactor } from "@/constants/layout";
 -import { isNative } from "@/constants/platform";
-+import { useHasFinePointer } from "@/hooks/use-fine-pointer";
++import { usePointerCapabilities } from "@/hooks/pointer-capabilities";
  import {
    WorkspaceTabIcon,
    type WorkspaceTabPresentation,
@@ -1683,34 +1658,34 @@ index dd8c088e6..04a99690a 100644
      if (row.kind === "paseo") onDetachSubagent?.(row.address);
    }, [onDetachSubagent, row]);
 -  const actionsAlwaysVisible = isNative || isCompact;
-+  const hasFinePointer = useHasFinePointer();
++  const { finePointer: hasFinePointer } = usePointerCapabilities();
 +  const actionsAlwaysVisible = !hasFinePointer || isCompact;
  
    const renderRow = useCallback(
      ({ active }: { active: boolean }) => (
 diff --git a/packages/app/src/usage/card.tsx b/packages/app/src/usage/card.tsx
-index 7d0f9903d..7f18fd302 100644
+index 800047274..77c6a1f11 100644
 --- a/packages/app/src/usage/card.tsx
 +++ b/packages/app/src/usage/card.tsx
-@@ -12,7 +12,7 @@ import { LoadingSpinner } from "@/components/ui/loading-spinner";
- import { ToolbarButton, paneContentToolbarIconSize } from "@/components/ui/pane-content-toolbar";
+@@ -15,7 +15,7 @@ import { ToolbarButton, paneContentToolbarIconSize } from "@/components/ui/pane-
  import { StatusBadge } from "@/components/ui/status-badge";
+ import { Switch } from "@/components/ui/switch";
  import { useIsCompactFormFactor } from "@/constants/layout";
 -import { isNative } from "@/constants/platform";
-+import { useHasFinePointer } from "@/hooks/use-fine-pointer";
++import { usePointerCapabilities } from "@/hooks/pointer-capabilities";
  import type { TFunction } from "i18next";
  import { UsageBalanceBar } from "./balance-bar";
  import type { UsageDisplay } from "./display";
-@@ -57,7 +57,8 @@ export function UsageCard({
+@@ -72,7 +72,8 @@ export function UsageCard({
    const isCompact = useIsCompactFormFactor();
    const { refresh, refreshState } = useReportRefresh(serverId, entry.id, agentId);
    // Where there is no hover the freshness is printed on the card; elsewhere the Refresh tooltip.
 -  const showsFreshnessInline = isNative || isCompact || !refreshable;
-+  const hasFinePointer = useHasFinePointer();
++  const { finePointer: hasFinePointer } = usePointerCapabilities();
 +  const showsFreshnessInline = !hasFinePointer || isCompact || !refreshable;
    const usage = entry.report;
    const status = statusText(usage, t);
-   const footer = entry.account.label ?? null;
+   const collapsed = arrangement?.on === false;
 diff --git a/packages/app/src/utils/keep-awake.harmony.ts b/packages/app/src/utils/keep-awake.harmony.ts
 new file mode 100644
 index 000000000..62fd3337a
@@ -1800,7 +1775,7 @@ index 000000000..65690d168
 +
 +assertCoversExports<typeof Base, typeof import("./os-notifications.harmony")>();
 diff --git a/packages/app/src/workspace-labels/manager-modal.tsx b/packages/app/src/workspace-labels/manager-modal.tsx
-index 8b0905dd1..ceb885882 100644
+index 5ef3252e5..33dfdd950 100644
 --- a/packages/app/src/workspace-labels/manager-modal.tsx
 +++ b/packages/app/src/workspace-labels/manager-modal.tsx
 @@ -20,7 +20,7 @@ import { Button } from "@/components/ui/button";
@@ -1808,16 +1783,16 @@ index 8b0905dd1..ceb885882 100644
  import { Field, FormTextInput } from "@/components/ui/form-field";
  import { useIsCompactFormFactor } from "@/constants/layout";
 -import { isNative } from "@/constants/platform";
-+import { useHasFinePointer } from "@/hooks/use-fine-pointer";
++import { usePointerCapabilities } from "@/hooks/pointer-capabilities";
  import { useHosts } from "@/runtime/host-runtime";
  import type { Theme } from "@/styles/theme";
  import { confirmDialog } from "@/utils/confirm-dialog";
-@@ -249,7 +249,8 @@ function WorkspaceLabelManagerRow({
+@@ -250,7 +250,8 @@ function WorkspaceLabelManagerRow({
    const handlePointerEnter = useCallback(() => setIsHovered(true), []);
    const handlePointerLeave = useCallback(() => setIsHovered(false), []);
    const edit = useCallback(() => onEdit(label), [label, onEdit]);
 -  const revealed = isHovered || isNative || isCompact;
-+  const hasFinePointer = useHasFinePointer();
++  const { finePointer: hasFinePointer } = usePointerCapabilities();
 +  const revealed = isHovered || !hasFinePointer || isCompact;
    const editStyle = useCallback(
      ({ pressed }: PressableStateCallbackType) => [

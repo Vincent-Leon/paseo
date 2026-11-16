@@ -17,7 +17,7 @@ packages/app src/stores/sidebar-collapsed-sections-store/state.test.ts
 packages/app src/harmony/host.test.ts
 packages/app src/harmony/notifications.test.ts
 packages/app src/components/ui/tooltip.test.tsx
-packages/app src/hosts/pair-scan-model.test.ts
+packages/app src/hosts/add-host/internal/pair-scan-model.test.ts
 packages/server src/server/push/providers/huawei/provider.test.ts
 packages/server src/server/push/token-store.test.ts
 packages/server src/server/push/index.test.ts

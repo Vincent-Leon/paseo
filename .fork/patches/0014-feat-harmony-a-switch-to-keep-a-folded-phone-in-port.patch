@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Vincent Leon <leon@mbp.com>
 Date: Sun, 25 Oct 2026 10:17:08 +0800
-Subject: [PATCH 14/14] feat(harmony): a switch to keep a folded phone in
+Subject: [PATCH 14/15] feat(harmony): a switch to keep a folded phone in
  portrait
 
 On a foldable, the HarmonyOS shell can hold the window in portrait while
@@ -30,10 +30,10 @@ Every other build gets the base module, which renders nothing.
  create mode 100644 packages/app/src/screens/settings/general/fold-rotation-section.tsx
 
 diff --git a/packages/app/src/i18n/resources/ar.ts b/packages/app/src/i18n/resources/ar.ts
-index 4c3a776e4..2832ba239 100644
+index 3255fd97f..9470d4d58 100644
 --- a/packages/app/src/i18n/resources/ar.ts
 +++ b/packages/app/src/i18n/resources/ar.ts
-@@ -2444,6 +2444,11 @@ export const ar: TranslationResources = {
+@@ -2501,6 +2501,11 @@ export const ar: TranslationResources = {
          description: "أعد المرور على المظهر والمزوّدين والمشاريع وإقران الهاتف",
          action: "إظهار الإعداد مجددًا",
        },
@@ -46,10 +46,10 @@ index 4c3a776e4..2832ba239 100644
          title: "بيانات المتصفح",
          siteData: "ملفات تعريف الارتباط وبيانات المواقع",
 diff --git a/packages/app/src/i18n/resources/en.ts b/packages/app/src/i18n/resources/en.ts
-index fcedae646..d35e32128 100644
+index 68985bfaa..af42825f8 100644
 --- a/packages/app/src/i18n/resources/en.ts
 +++ b/packages/app/src/i18n/resources/en.ts
-@@ -2534,6 +2534,11 @@ export const en = {
+@@ -2596,6 +2596,11 @@ export const en = {
          description: "Walk through appearance, providers, projects and phone pairing again",
          action: "Show setup again",
        },
@@ -62,10 +62,10 @@ index fcedae646..d35e32128 100644
          title: "Browser data",
          siteData: "Cookies and site data",
 diff --git a/packages/app/src/i18n/resources/es.ts b/packages/app/src/i18n/resources/es.ts
-index e4082a9df..9c4ce0c1e 100644
+index a3892d840..8ba6fb1d5 100644
 --- a/packages/app/src/i18n/resources/es.ts
 +++ b/packages/app/src/i18n/resources/es.ts
-@@ -2458,6 +2458,11 @@ export const es: TranslationResources = {
+@@ -2515,6 +2515,11 @@ export const es: TranslationResources = {
            "Vuelve a recorrer apariencia, proveedores, proyectos y emparejamiento del teléfono",
          action: "Mostrar configuración de nuevo",
        },
@@ -78,10 +78,10 @@ index e4082a9df..9c4ce0c1e 100644
          title: "Datos del navegador",
          siteData: "Cookies y datos de sitios",
 diff --git a/packages/app/src/i18n/resources/fr.ts b/packages/app/src/i18n/resources/fr.ts
-index dd9898a81..db7d6b67a 100644
+index b27701489..38215f5df 100644
 --- a/packages/app/src/i18n/resources/fr.ts
 +++ b/packages/app/src/i18n/resources/fr.ts
-@@ -2459,6 +2459,11 @@ export const fr: TranslationResources = {
+@@ -2516,6 +2516,11 @@ export const fr: TranslationResources = {
            "Reprendre l'apparence, les fournisseurs, les projets et l'appairage du téléphone",
          action: "Afficher la configuration",
        },
@@ -94,10 +94,10 @@ index dd9898a81..db7d6b67a 100644
          title: "Données du navigateur",
          siteData: "Cookies et données des sites",
 diff --git a/packages/app/src/i18n/resources/ja.ts b/packages/app/src/i18n/resources/ja.ts
-index cd89d9498..16b819602 100644
+index ef46c36e0..27b1e66bf 100644
 --- a/packages/app/src/i18n/resources/ja.ts
 +++ b/packages/app/src/i18n/resources/ja.ts
-@@ -2432,6 +2432,11 @@ export const ja: TranslationResources = {
+@@ -2489,6 +2489,11 @@ export const ja: TranslationResources = {
            "外観、プロバイダー、プロジェクト、スマートフォンのペアリングをもう一度設定します",
          action: "セットアップを再表示",
        },
@@ -110,10 +110,10 @@ index cd89d9498..16b819602 100644
          title: "ブラウザーデータ",
          siteData: "Cookie とサイトデータ",
 diff --git a/packages/app/src/i18n/resources/ko.ts b/packages/app/src/i18n/resources/ko.ts
-index 7f7d79403..e6eaab1fb 100644
+index ee9c1e1fb..934a9cf83 100644
 --- a/packages/app/src/i18n/resources/ko.ts
 +++ b/packages/app/src/i18n/resources/ko.ts
-@@ -2419,6 +2419,11 @@ export const ko: TranslationResources = {
+@@ -2476,6 +2476,11 @@ export const ko: TranslationResources = {
          description: "모양, 제공자, 프로젝트, 휴대폰 페어링을 다시 진행합니다",
          action: "설정 다시 보기",
        },
@@ -126,10 +126,10 @@ index 7f7d79403..e6eaab1fb 100644
          title: "브라우저 데이터",
          siteData: "쿠키 및 사이트 데이터",
 diff --git a/packages/app/src/i18n/resources/pt-BR.ts b/packages/app/src/i18n/resources/pt-BR.ts
-index 2bdbe2229..88a982bfa 100644
+index a774659a6..0106196f4 100644
 --- a/packages/app/src/i18n/resources/pt-BR.ts
 +++ b/packages/app/src/i18n/resources/pt-BR.ts
-@@ -2442,6 +2442,11 @@ export const ptBR: TranslationResources = {
+@@ -2499,6 +2499,11 @@ export const ptBR: TranslationResources = {
          description: "Rever aparência, provedores, projetos e pareamento do celular",
          action: "Mostrar configuração novamente",
        },
@@ -142,10 +142,10 @@ index 2bdbe2229..88a982bfa 100644
          title: "Dados do navegador",
          siteData: "Cookies e dados de sites",
 diff --git a/packages/app/src/i18n/resources/ru.ts b/packages/app/src/i18n/resources/ru.ts
-index c580207d8..36d0c4132 100644
+index ff8cf5dfb..9b7e2dfb7 100644
 --- a/packages/app/src/i18n/resources/ru.ts
 +++ b/packages/app/src/i18n/resources/ru.ts
-@@ -2445,6 +2445,11 @@ export const ru: TranslationResources = {
+@@ -2502,6 +2502,11 @@ export const ru: TranslationResources = {
          description: "Снова пройти оформление, провайдеры, проекты и привязку телефона",
          action: "Показать настройку снова",
        },
@@ -158,10 +158,10 @@ index c580207d8..36d0c4132 100644
          title: "Данные браузера",
          siteData: "Файлы cookie и данные сайтов",
 diff --git a/packages/app/src/i18n/resources/zh-CN.ts b/packages/app/src/i18n/resources/zh-CN.ts
-index 942dd7701..635445bc2 100644
+index ec88bbe44..619cdfa38 100644
 --- a/packages/app/src/i18n/resources/zh-CN.ts
 +++ b/packages/app/src/i18n/resources/zh-CN.ts
-@@ -2384,6 +2384,11 @@ export const zhCN: TranslationResources = {
+@@ -2441,6 +2441,11 @@ export const zhCN: TranslationResources = {
          description: "重新设置外观、提供方、项目和手机配对",
          action: "再次显示设置",
        },
@@ -174,10 +174,10 @@ index 942dd7701..635445bc2 100644
          title: "浏览器数据",
          siteData: "Cookie 和网站数据",
 diff --git a/packages/app/src/screens/settings-screen.tsx b/packages/app/src/screens/settings-screen.tsx
-index fa87c28cf..f48f83c7d 100644
+index 7fc6dbe24..e44ced553 100644
 --- a/packages/app/src/screens/settings-screen.tsx
 +++ b/packages/app/src/screens/settings-screen.tsx
-@@ -56,6 +56,7 @@ import { TerminalSection } from "@/screens/settings/terminal/terminal-section";
+@@ -53,6 +53,7 @@ import { TerminalSection } from "@/screens/settings/terminal/terminal-section";
  import { ChatSection } from "@/screens/settings/chat/chat-section";
  import { SidebarNavSection } from "@/screens/settings/sidebar/sidebar-nav-section";
  import { SendingSection } from "@/screens/settings/general/sending-section";
@@ -185,7 +185,7 @@ index fa87c28cf..f48f83c7d 100644
  import {
    useAppSettings,
    useSettings,
-@@ -1367,6 +1368,7 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
+@@ -1340,6 +1341,7 @@ export default function SettingsScreen({ view }: SettingsScreenProps) {
              <>
                <GeneralSection settings={settings} handleLanguageChange={handleLanguageChange} />
                <SendingSection />

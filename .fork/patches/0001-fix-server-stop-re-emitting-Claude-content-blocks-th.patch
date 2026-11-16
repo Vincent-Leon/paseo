@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Vincent Leon <leon@mbp.com>
 Date: Wed, 21 Oct 2026 12:07:14 +0800
-Subject: [PATCH 01/14] fix(server): stop re-emitting Claude content blocks
+Subject: [PATCH 01/15] fix(server): stop re-emitting Claude content blocks
  that were already streamed
 
 The Claude Code SDK sends one assistant message per content block, all sharing
@@ -348,10 +348,10 @@ index 000000000..281f380f1
 +  });
 +});
 diff --git a/packages/server/src/server/agent/providers/claude/agent.ts b/packages/server/src/server/agent/providers/claude/agent.ts
-index d232185cb..72ea55774 100644
+index 8bafb4e1e..d5c8ebcf9 100644
 --- a/packages/server/src/server/agent/providers/claude/agent.ts
 +++ b/packages/server/src/server/agent/providers/claude/agent.ts
-@@ -1235,6 +1235,24 @@ interface TimelineMessageState {
+@@ -1246,6 +1246,24 @@ interface TimelineMessageState {
    stopped: boolean;
  }
  
@@ -376,7 +376,7 @@ index d232185cb..72ea55774 100644
  class TimelineAssembler {
    private readonly messages = new Map<string, TimelineMessageState>();
    private readonly finalizedMessageIds = new Set<string>();
-@@ -1369,16 +1387,10 @@ class TimelineAssembler {
+@@ -1380,16 +1398,10 @@ class TimelineAssembler {
        .join("");
  
      if (assistantText.length > 0) {

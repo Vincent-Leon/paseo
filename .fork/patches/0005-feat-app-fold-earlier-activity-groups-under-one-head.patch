@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Vincent Leon <leon@mbp.com>
 Date: Thu, 22 Oct 2026 17:59:15 +0800
-Subject: [PATCH 05/14] feat(app): fold earlier activity groups under one
+Subject: [PATCH 05/15] feat(app): fold earlier activity groups under one
  heading
 
 In activity grouping, the groups for work finished before the window now
@@ -24,16 +24,17 @@ group at once, or expands them all once they are all collapsed.
  13 files changed, 154 insertions(+), 12 deletions(-)
 
 diff --git a/packages/app/src/components/sidebar/sidebar-status-list.tsx b/packages/app/src/components/sidebar/sidebar-status-list.tsx
-index 40fe38c35..edb295324 100644
+index 766ed55c2..729674994 100644
 --- a/packages/app/src/components/sidebar/sidebar-status-list.tsx
 +++ b/packages/app/src/components/sidebar/sidebar-status-list.tsx
-@@ -1,4 +1,5 @@
+@@ -1,5 +1,6 @@
+ import { PressHighlight as Pressable } from "@/components/ui/press-highlight";
  import {
 +  Fragment,
    memo,
    useCallback,
    useMemo,
-@@ -34,11 +35,15 @@ import { withUnistyles } from "react-native-unistyles";
+@@ -28,11 +29,15 @@ import { withUnistyles } from "react-native-unistyles";
  import {
    ChevronDown,
    ChevronRight,
@@ -47,7 +48,7 @@ index 40fe38c35..edb295324 100644
 +import { DensityIcon } from "@/components/ui/density-icon";
 +import { ToolbarButton } from "@/components/ui/pane-content-toolbar";
  import { useToast } from "@/contexts/toast-context";
- import { WorkspaceRenameModal } from "@/components/workspace-rename-modal";
+ import { useSidebarWorkspaceRename } from "@/workspace-rename";
  import { useWorkspaceClipboardActions } from "@/hooks/use-workspace-clipboard-actions";
 @@ -320,21 +325,35 @@ function StatusGroupList({
    supportsPinningByServerId: ReadonlyMap<string, boolean>;
@@ -147,10 +148,10 @@ index 40fe38c35..edb295324 100644
    group,
    collapsed,
 diff --git a/packages/app/src/i18n/resources/ar.ts b/packages/app/src/i18n/resources/ar.ts
-index f20b2056c..ac6f95e1d 100644
+index 3e5f96397..2400f25eb 100644
 --- a/packages/app/src/i18n/resources/ar.ts
 +++ b/packages/app/src/i18n/resources/ar.ts
-@@ -1172,6 +1172,11 @@ export const ar: TranslationResources = {
+@@ -1217,6 +1217,11 @@ export const ar: TranslationResources = {
          twelveHours: "تم خلال آخر 12 ساعة",
          today: "تم اليوم",
        },
@@ -163,10 +164,10 @@ index f20b2056c..ac6f95e1d 100644
      display: {
        showBackground: "إظهار مساحات العمل في الخلفية",
 diff --git a/packages/app/src/i18n/resources/en.ts b/packages/app/src/i18n/resources/en.ts
-index 26cf1522f..f57375b7b 100644
+index 4c006eae7..734509f3f 100644
 --- a/packages/app/src/i18n/resources/en.ts
 +++ b/packages/app/src/i18n/resources/en.ts
-@@ -1180,6 +1180,11 @@ export const en = {
+@@ -1227,6 +1227,11 @@ export const en = {
          twelveHours: "Done in the last 12 hours",
          today: "Done today",
        },
@@ -179,10 +180,10 @@ index 26cf1522f..f57375b7b 100644
      display: {
        showBackground: "Show background",
 diff --git a/packages/app/src/i18n/resources/es.ts b/packages/app/src/i18n/resources/es.ts
-index 7c4398f99..70ac12887 100644
+index 2bb349d88..b6c94f1d7 100644
 --- a/packages/app/src/i18n/resources/es.ts
 +++ b/packages/app/src/i18n/resources/es.ts
-@@ -1208,6 +1208,11 @@ export const es: TranslationResources = {
+@@ -1253,6 +1253,11 @@ export const es: TranslationResources = {
          twelveHours: "Terminado en las últimas 12 horas",
          today: "Terminado hoy",
        },
@@ -195,10 +196,10 @@ index 7c4398f99..70ac12887 100644
      display: {
        showBackground: "Mostrar espacios en segundo plano",
 diff --git a/packages/app/src/i18n/resources/fr.ts b/packages/app/src/i18n/resources/fr.ts
-index 8e25ed497..ed5a580ae 100644
+index 8cc297a0a..d9f0a87b3 100644
 --- a/packages/app/src/i18n/resources/fr.ts
 +++ b/packages/app/src/i18n/resources/fr.ts
-@@ -1201,6 +1201,11 @@ export const fr: TranslationResources = {
+@@ -1246,6 +1246,11 @@ export const fr: TranslationResources = {
          twelveHours: "Terminé ces 12 dernières heures",
          today: "Terminé aujourd’hui",
        },
@@ -211,10 +212,10 @@ index 8e25ed497..ed5a580ae 100644
      display: {
        showBackground: "Afficher les espaces en arrière-plan",
 diff --git a/packages/app/src/i18n/resources/ja.ts b/packages/app/src/i18n/resources/ja.ts
-index 2c0fa70b1..e03c9b970 100644
+index 489596833..e665daa93 100644
 --- a/packages/app/src/i18n/resources/ja.ts
 +++ b/packages/app/src/i18n/resources/ja.ts
-@@ -1185,6 +1185,11 @@ export const ja: TranslationResources = {
+@@ -1230,6 +1230,11 @@ export const ja: TranslationResources = {
          twelveHours: "過去12時間に完了",
          today: "今日完了",
        },
@@ -227,10 +228,10 @@ index 2c0fa70b1..e03c9b970 100644
      display: {
        showBackground: "バックグラウンドを表示",
 diff --git a/packages/app/src/i18n/resources/ko.ts b/packages/app/src/i18n/resources/ko.ts
-index 88e1dc22a..ce19e6a1f 100644
+index cc0368241..adbc48f44 100644
 --- a/packages/app/src/i18n/resources/ko.ts
 +++ b/packages/app/src/i18n/resources/ko.ts
-@@ -1179,6 +1179,11 @@ export const ko: TranslationResources = {
+@@ -1224,6 +1224,11 @@ export const ko: TranslationResources = {
          twelveHours: "최근 12시간 내 완료",
          today: "오늘 완료",
        },
@@ -243,10 +244,10 @@ index 88e1dc22a..ce19e6a1f 100644
      display: {
        showBackground: "백그라운드 표시",
 diff --git a/packages/app/src/i18n/resources/pt-BR.ts b/packages/app/src/i18n/resources/pt-BR.ts
-index 52f8afa9c..bf4bff50c 100644
+index 1329029b5..259f95728 100644
 --- a/packages/app/src/i18n/resources/pt-BR.ts
 +++ b/packages/app/src/i18n/resources/pt-BR.ts
-@@ -1198,6 +1198,11 @@ export const ptBR: TranslationResources = {
+@@ -1243,6 +1243,11 @@ export const ptBR: TranslationResources = {
          twelveHours: "Concluído nas últimas 12 horas",
          today: "Concluído hoje",
        },
@@ -259,10 +260,10 @@ index 52f8afa9c..bf4bff50c 100644
      display: {
        showBackground: "Mostrar espaços em segundo plano",
 diff --git a/packages/app/src/i18n/resources/ru.ts b/packages/app/src/i18n/resources/ru.ts
-index 0f9d72764..8b2e8e136 100644
+index b20afbeaa..4a976b256 100644
 --- a/packages/app/src/i18n/resources/ru.ts
 +++ b/packages/app/src/i18n/resources/ru.ts
-@@ -1189,6 +1189,11 @@ export const ru: TranslationResources = {
+@@ -1234,6 +1234,11 @@ export const ru: TranslationResources = {
          twelveHours: "Готово за последние 12 часов",
          today: "Готово сегодня",
        },
@@ -275,10 +276,10 @@ index 0f9d72764..8b2e8e136 100644
      display: {
        showBackground: "Показать фоновые пространства",
 diff --git a/packages/app/src/i18n/resources/zh-CN.ts b/packages/app/src/i18n/resources/zh-CN.ts
-index c04a9484e..5cc48e623 100644
+index 8e2e2e0d3..f36ff8474 100644
 --- a/packages/app/src/i18n/resources/zh-CN.ts
 +++ b/packages/app/src/i18n/resources/zh-CN.ts
-@@ -1164,6 +1164,11 @@ export const zhCN: TranslationResources = {
+@@ -1209,6 +1209,11 @@ export const zhCN: TranslationResources = {
          twelveHours: "最近 12 小时完成",
          today: "今天完成",
        },

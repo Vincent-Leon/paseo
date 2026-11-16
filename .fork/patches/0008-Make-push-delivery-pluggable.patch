@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Vincent Leon <leon@mbp.com>
 Date: Wed, 19 Aug 2026 09:34:41 +0800
-Subject: [PATCH 08/14] Make push delivery pluggable
+Subject: [PATCH 08/15] Make push delivery pluggable
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
@@ -60,10 +60,10 @@ interface broke it at runtime with no compile error. It is typed now.
  delete mode 100644 packages/server/src/server/push/push-service.ts
 
 diff --git a/packages/protocol/src/messages.ts b/packages/protocol/src/messages.ts
-index 02c8e61fd..e57304757 100644
+index 8cf0629fa..3ad06d50b 100644
 --- a/packages/protocol/src/messages.ts
 +++ b/packages/protocol/src/messages.ts
-@@ -2999,12 +2999,18 @@ export const ListCommandsRequestSchema = z.object({
+@@ -3227,12 +3227,18 @@ export const ListCommandsRequestSchema = z.object({
  export const RegisterPushTokenMessageSchema = z.object({
    type: z.literal("register_push_token"),
    token: z.string(),
@@ -82,7 +82,7 @@ index 02c8e61fd..e57304757 100644
  });
  
  export const PushUnregisterResponseSchema = z.object({
-@@ -3731,6 +3737,11 @@ export const ServerInfoStatusPayloadSchema = z
+@@ -3979,6 +3985,11 @@ export const ServerInfoStatusPayloadSchema = z
          relayConfig: z.boolean().optional(),
          // COMPAT(pushTokenRevocation): added in v0.3.2, remove gate after 2027-02-10.
          pushTokenRevocation: z.boolean().optional(),
@@ -917,10 +917,10 @@ index 540f05313..a4f23913c 100644
 +  }));
 +}
 diff --git a/packages/server/src/server/session.ts b/packages/server/src/server/session.ts
-index efa0c9e3b..b9988a93d 100644
+index fcdbbae1e..c2e22c736 100644
 --- a/packages/server/src/server/session.ts
 +++ b/packages/server/src/server/session.ts
-@@ -195,7 +195,7 @@ import type { HubRelationshipManagement } from "./hub/relationship-controller.js
+@@ -218,7 +218,7 @@ import type { HubRelationshipManagement } from "./hub/relationship-controller.js
  import { HubExecutionController } from "./hub/execution-controller.js";
  import type { HubExecutionAgents } from "./hub/daemon-executions.js";
  import { DownloadTokenStore } from "./file-download/token-store.js";
@@ -929,7 +929,7 @@ index efa0c9e3b..b9988a93d 100644
  import {
    archivePersistedWorkspaceRecord,
    archiveWorkspaceContents,
-@@ -783,7 +783,7 @@ export class Session {
+@@ -832,7 +832,7 @@ export class Session {
        capabilities: ReadonlySet<ClientCapability>;
        appVersion: string | null;
        activity: ClientActivity | null;
@@ -938,7 +938,7 @@ index efa0c9e3b..b9988a93d 100644
      }
    >();
    private unsubscribeTerminalWorkspaceContributionEvents: (() => void) | null = null;
-@@ -3247,12 +3247,18 @@ export class Session {
+@@ -3549,12 +3549,18 @@ export class Session {
          await this.handleListCommandsRequest(msg);
          return;
        case "register_push_token":
@@ -961,7 +961,7 @@ index efa0c9e3b..b9988a93d 100644
          }
          this.emit({
            type: "push.unregister.response",
-@@ -5065,7 +5071,7 @@ export class Session {
+@@ -5483,7 +5489,7 @@ export class Session {
        void this.clearFocusedTerminalAttention(focusedTerminalId);
      }
      if (metadata.pushToken) {
@@ -970,7 +970,7 @@ index efa0c9e3b..b9988a93d 100644
      }
    }
  
-@@ -5084,10 +5090,12 @@ export class Session {
+@@ -5502,10 +5508,12 @@ export class Session {
    /**
     * Handle push token registration
     */
@@ -988,7 +988,7 @@ index efa0c9e3b..b9988a93d 100644
  
    /**
 diff --git a/packages/server/src/server/websocket-server.relay-reconnect.test.ts b/packages/server/src/server/websocket-server.relay-reconnect.test.ts
-index c99d5ac9c..9f0b7c265 100644
+index 7dcb02669..9a164946b 100644
 --- a/packages/server/src/server/websocket-server.relay-reconnect.test.ts
 +++ b/packages/server/src/server/websocket-server.relay-reconnect.test.ts
 @@ -121,14 +121,16 @@ vi.mock("./session.js", () => ({
@@ -1010,10 +1010,10 @@ index c99d5ac9c..9f0b7c265 100644
  import { DAEMON_PERMISSIONS, parseServerInfoStatusPayload } from "./messages.js";
  import type { SpeechReadinessSnapshot } from "./speech/speech-runtime.js";
 diff --git a/packages/server/src/server/websocket-server.ts b/packages/server/src/server/websocket-server.ts
-index 43b7153ca..27d26a13b 100644
+index cbbdd9685..f950411e5 100644
 --- a/packages/server/src/server/websocket-server.ts
 +++ b/packages/server/src/server/websocket-server.ts
-@@ -2055,6 +2055,10 @@ export class VoiceAssistantWebSocketServer {
+@@ -2086,6 +2086,10 @@ export class VoiceAssistantWebSocketServer {
          ...(this.advertiseRelayConfig ? { relayConfig: true } : {}),
          // COMPAT(pushTokenRevocation): added in v0.3.2, remove gate after 2027-02-10.
          pushTokenRevocation: true,

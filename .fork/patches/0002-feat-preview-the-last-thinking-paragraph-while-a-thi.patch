@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Vincent Leon <leon@mbp.com>
 Date: Wed, 21 Oct 2026 14:47:35 +0800
-Subject: [PATCH 02/14] feat: preview the last thinking paragraph while a
+Subject: [PATCH 02/15] feat: preview the last thinking paragraph while a
  thinking group is collapsed
 
 Agents often end a thinking group with a short note to the user (what they
@@ -19,11 +19,11 @@ re-emitted. Without block starts the output is unchanged.
  .../src/agent-stream/thought-preview.test.ts  | 186 ++++++++++++++++++
  .../app/src/agent-stream/thought-preview.ts   |  50 +++++
  packages/app/src/agent-stream/view.tsx        |  13 ++
- packages/app/src/components/message.tsx       |  21 ++
+ packages/app/src/components/message.tsx       |  33 ++++
  .../tool-calls/detail-level/overview/view.tsx |   4 +
  .../claude/agent.timeline-assembly.test.ts    | 108 ++++++++++
  .../server/agent/providers/claude/agent.ts    |  84 ++++++--
- 7 files changed, 452 insertions(+), 14 deletions(-)
+ 7 files changed, 464 insertions(+), 14 deletions(-)
  create mode 100644 packages/app/src/agent-stream/thought-preview.test.ts
  create mode 100644 packages/app/src/agent-stream/thought-preview.ts
 
@@ -276,10 +276,10 @@ index 000000000..1bbe750af
 +  return `${kept.trimEnd()}…`;
 +}
 diff --git a/packages/app/src/agent-stream/view.tsx b/packages/app/src/agent-stream/view.tsx
-index 72923b421..9ec12fcde 100644
+index 9f71998a4..ed8e63bcb 100644
 --- a/packages/app/src/agent-stream/view.tsx
 +++ b/packages/app/src/agent-stream/view.tsx
-@@ -88,6 +88,7 @@ import {
+@@ -94,6 +94,7 @@ import {
  } from "./turn-footer";
  import { resolveBottomOverlayTailInset } from "./bottom-overlay-inset";
  import { layoutStream, type StreamLayoutItem } from "./layout";
@@ -287,7 +287,7 @@ index 72923b421..9ec12fcde 100644
  import {
    type BottomAnchorLocalRequest,
    type BottomAnchorRouteRequest,
-@@ -797,6 +798,7 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
+@@ -778,6 +779,7 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
              onInlineDetailsExpandedChangeByItemId={setInlineDetailsExpanded}
              text={item.text}
              status={item.status}
@@ -295,7 +295,7 @@ index 72923b421..9ec12fcde 100644
              isLastInSequence={layoutItem.isLastInToolSequence}
              defaultExpanded={autoExpandReasoning}
            />
-@@ -888,6 +890,10 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
+@@ -869,6 +871,10 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
              group={group}
              expanded={expanded}
              isLastInSequence={layoutItem.isLastInToolSequence}
@@ -306,7 +306,7 @@ index 72923b421..9ec12fcde 100644
              onExpandedChange={setToolCallGroupExpanded}
            >
              {expanded
-@@ -900,6 +906,10 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
+@@ -881,6 +887,10 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
                          itemId={call.id}
                          text={call.text}
                          status={call.status}
@@ -316,8 +316,8 @@ index 72923b421..9ec12fcde 100644
 +                        })}
                          isLastInSequence={index === group.run.calls.length - 1}
                          defaultExpanded={false}
-                         standalone={false}
-@@ -1402,6 +1412,7 @@ interface ThoughtSlotProps {
+                         maxDetailHeight={GROUPED_TOOL_CALL_DETAIL_MAX_HEIGHT}
+@@ -1373,6 +1383,7 @@ interface ThoughtSlotProps {
    onInlineDetailsExpandedChangeByItemId: (itemId: string, expanded: boolean) => void;
    text: string;
    status: Extract<StreamItem, { kind: "thought" }>["status"];
@@ -325,7 +325,7 @@ index 72923b421..9ec12fcde 100644
    isLastInSequence: boolean;
    defaultExpanded: boolean;
    standalone?: boolean;
-@@ -1413,6 +1424,7 @@ function ThoughtSlot({
+@@ -1385,6 +1396,7 @@ function ThoughtSlot({
    onInlineDetailsExpandedChangeByItemId,
    text,
    status,
@@ -333,7 +333,7 @@ index 72923b421..9ec12fcde 100644
    isLastInSequence,
    defaultExpanded,
    standalone,
-@@ -1423,6 +1435,7 @@ function ThoughtSlot({
+@@ -1396,6 +1408,7 @@ function ThoughtSlot({
        itemId={itemId}
        onInlineDetailsExpandedChangeByItemId={onInlineDetailsExpandedChangeByItemId}
        toolName="thinking"
@@ -342,10 +342,10 @@ index 72923b421..9ec12fcde 100644
        status={status === "ready" ? "completed" : "executing"}
        isLastInSequence={isLastInSequence}
 diff --git a/packages/app/src/components/message.tsx b/packages/app/src/components/message.tsx
-index 0ec5cbfb4..77b7f4616 100644
+index f119e55e9..d10197257 100644
 --- a/packages/app/src/components/message.tsx
 +++ b/packages/app/src/components/message.tsx
-@@ -938,6 +938,14 @@ const expandableBadgeStylesheet = StyleSheet.create((theme) => ({
+@@ -981,6 +981,14 @@ const expandableBadgeStylesheet = StyleSheet.create((theme) => ({
    secondaryLabelActive: {
      color: theme.colors.foreground,
    },
@@ -360,7 +360,7 @@ index 0ec5cbfb4..77b7f4616 100644
    shimmerText: {
      color: "transparent",
      fontSize: theme.fontSize.base,
-@@ -1517,6 +1525,8 @@ export const TodoListCard = memo(function TodoListCard({
+@@ -1557,6 +1565,8 @@ export const TodoListCard = memo(function TodoListCard({
  interface ExpandableBadgeProps {
    label: string;
    secondaryLabel?: string;
@@ -369,7 +369,7 @@ index 0ec5cbfb4..77b7f4616 100644
    icon?: ComponentType<{ size?: number; color?: string }>;
    isExpanded: boolean;
    style?: StyleProp<ViewStyle>;
-@@ -1881,6 +1891,7 @@ export const ExpandableBadge = memo(function ExpandableBadge({
+@@ -1882,6 +1892,7 @@ export const ExpandableBadge = memo(function ExpandableBadge({
    label,
    style,
    secondaryLabel,
@@ -377,19 +377,34 @@ index 0ec5cbfb4..77b7f4616 100644
    icon,
    isExpanded,
    onToggle,
-@@ -2190,6 +2201,11 @@ export const ExpandableBadge = memo(function ExpandableBadge({
-             onOpenFileHoverOut={handleOpenFileHoverOut}
-           />
-         </View>
-+        {preview && !isExpanded ? (
-+          <Text style={expandableBadgeStylesheet.preview} numberOfLines={2}>
-+            {preview}
-+          </Text>
-+        ) : null}
-       </Pressable>
+@@ -2199,6 +2210,7 @@ export const ExpandableBadge = memo(function ExpandableBadge({
+           </Pressable>
+         ) : null}
+       </View>
++      <ExpandableBadgePreview preview={preview} isExpanded={isExpanded} />
        {detailContent ? (
-         <Pressable
-@@ -2208,6 +2224,7 @@ export const ExpandableBadge = memo(function ExpandableBadge({
+         <View ref={detailWrapperRef} style={detailWrapperStyle}>
+           {detailContent}
+@@ -2208,9 +2220,26 @@ export const ExpandableBadge = memo(function ExpandableBadge({
+   );
+ }, areExpandableBadgePropsEqual);
+ 
++// Shown under the header only while the badge is collapsed.
++function ExpandableBadgePreview({
++  preview,
++  isExpanded,
++}: {
++  preview: string | null | undefined;
++  isExpanded: boolean;
++}) {
++  if (!preview || isExpanded) return null;
++  return (
++    <Text style={expandableBadgeStylesheet.preview} numberOfLines={2}>
++      {preview}
++    </Text>
++  );
++}
++
  function areExpandableBadgePropsEqual(previous: ExpandableBadgeProps, next: ExpandableBadgeProps) {
    if (previous.label !== next.label) return false;
    if (previous.secondaryLabel !== next.secondaryLabel) return false;
@@ -397,7 +412,7 @@ index 0ec5cbfb4..77b7f4616 100644
    if (previous.icon !== next.icon) return false;
    if (previous.isExpanded !== next.isExpanded) return false;
    if (previous.style !== next.style) return false;
-@@ -2228,6 +2245,7 @@ interface ToolCallProps {
+@@ -2230,6 +2259,7 @@ interface ToolCallProps {
    agentMessage?: AgentMessage;
    serverId?: string;
    toolName: string;
@@ -405,7 +420,7 @@ index 0ec5cbfb4..77b7f4616 100644
    args?: unknown;
    result?: unknown;
    error?: unknown;
-@@ -2252,6 +2270,7 @@ export const ToolCall = memo(function ToolCall({
+@@ -2253,6 +2283,7 @@ export const ToolCall = memo(function ToolCall({
    agentMessage,
    serverId,
    toolName,
@@ -413,7 +428,7 @@ index 0ec5cbfb4..77b7f4616 100644
    args,
    result,
    error,
-@@ -2409,6 +2428,7 @@ export const ToolCall = memo(function ToolCall({
+@@ -2404,6 +2435,7 @@ export const ToolCall = memo(function ToolCall({
        testID="tool-call-badge"
        label={presentation.displayName}
        secondaryLabel={presentation.summary}
@@ -421,7 +436,7 @@ index 0ec5cbfb4..77b7f4616 100644
        icon={presentation.icon}
        isExpanded={shouldRenderInline && isExpanded}
        onToggle={presentation.canOpenDetails ? handleToggle : undefined}
-@@ -2425,6 +2445,7 @@ export const ToolCall = memo(function ToolCall({
+@@ -2419,6 +2451,7 @@ export const ToolCall = memo(function ToolCall({
  
  function areToolCallPropsEqual(previous: ToolCallProps, next: ToolCallProps) {
    if (previous.toolName !== next.toolName) return false;
@@ -430,10 +445,10 @@ index 0ec5cbfb4..77b7f4616 100644
    if (previous.agentMessage !== next.agentMessage) return false;
    if (previous.args !== next.args) return false;
 diff --git a/packages/app/src/tool-calls/detail-level/overview/view.tsx b/packages/app/src/tool-calls/detail-level/overview/view.tsx
-index b11e82e4f..c25b61f7f 100644
+index 825a4ba9a..8f89e48b7 100644
 --- a/packages/app/src/tool-calls/detail-level/overview/view.tsx
 +++ b/packages/app/src/tool-calls/detail-level/overview/view.tsx
-@@ -13,6 +13,7 @@ interface OverviewGroupProps {
+@@ -14,6 +14,7 @@ interface OverviewGroupProps {
    group: OverviewToolCallGroup;
    expanded: boolean;
    isLastInSequence: boolean;
@@ -441,7 +456,7 @@ index b11e82e4f..c25b61f7f 100644
    onExpandedChange: (groupId: string, expanded: boolean) => void;
    children: ReactNode;
  }
-@@ -23,6 +24,7 @@ export const OverviewToolCallGroupView = memo(function OverviewToolCallGroupView
+@@ -24,6 +25,7 @@ export const OverviewToolCallGroupView = memo(function OverviewToolCallGroupView
    group,
    expanded,
    isLastInSequence,
@@ -449,7 +464,7 @@ index b11e82e4f..c25b61f7f 100644
    onExpandedChange,
    children,
  }: OverviewGroupProps) {
-@@ -60,6 +62,7 @@ export const OverviewToolCallGroupView = memo(function OverviewToolCallGroupView
+@@ -50,6 +52,7 @@ export const OverviewToolCallGroupView = memo(function OverviewToolCallGroupView
          <ExpandableBadge
            testID="tool-call-group"
            label={aggregateSummary}
@@ -457,7 +472,7 @@ index b11e82e4f..c25b61f7f 100644
            icon={Wrench}
            isLoading={group.isLoading}
            isExpanded={false}
-@@ -77,6 +80,7 @@ export const OverviewToolCallGroupView = memo(function OverviewToolCallGroupView
+@@ -67,6 +70,7 @@ export const OverviewToolCallGroupView = memo(function OverviewToolCallGroupView
      <ExpandableBadge
        testID="tool-call-group"
        label={aggregateSummary}
@@ -590,10 +605,10 @@ index 281f380f1..14aa2c764 100644
 +  });
  });
 diff --git a/packages/server/src/server/agent/providers/claude/agent.ts b/packages/server/src/server/agent/providers/claude/agent.ts
-index 72ea55774..103fb40c0 100644
+index d5c8ebcf9..d130dd2b7 100644
 --- a/packages/server/src/server/agent/providers/claude/agent.ts
 +++ b/packages/server/src/server/agent/providers/claude/agent.ts
-@@ -1233,6 +1233,26 @@ interface TimelineMessageState {
+@@ -1244,6 +1244,26 @@ interface TimelineMessageState {
    emittedAssistantLength: number;
    emittedReasoningLength: number;
    stopped: boolean;
@@ -620,7 +635,7 @@ index 72ea55774..103fb40c0 100644
  }
  
  // An assistant message carries either a cumulative snapshot of the API message or, as the
-@@ -1243,14 +1263,14 @@ interface TimelineMessageState {
+@@ -1254,14 +1274,14 @@ interface TimelineMessageState {
  // messages on (always, in production) the stream deltas carry every block, so two identical
  // blocks are both shown. Without stream deltas, a block that matches the end of the text
  // before it cannot be told apart from a re-delivered snapshot and is not shown again.
@@ -637,7 +652,7 @@ index 72ea55774..103fb40c0 100644
  }
  
  class TimelineAssembler {
-@@ -1328,7 +1348,7 @@ class TimelineAssembler {
+@@ -1339,7 +1359,7 @@ class TimelineAssembler {
      }
  
      if (eventType === "content_block_start") {
@@ -646,7 +661,7 @@ index 72ea55774..103fb40c0 100644
      }
  
      if (eventType === "content_block_delta") {
-@@ -1338,6 +1358,27 @@ class TimelineAssembler {
+@@ -1349,6 +1369,27 @@ class TimelineAssembler {
      return [];
    }
  
@@ -674,7 +689,7 @@ index 72ea55774..103fb40c0 100644
    private consumeDeltaContent(
      content: unknown,
      runId: string | null,
-@@ -1367,8 +1408,11 @@ class TimelineAssembler {
+@@ -1378,8 +1419,11 @@ class TimelineAssembler {
        if (fragment.kind === "assistant") {
          state.assistantText += fragment.text;
        } else {
@@ -687,7 +702,7 @@ index 72ea55774..103fb40c0 100644
      }
      return this.emitNewContent(state);
    }
-@@ -1377,20 +1421,29 @@ class TimelineAssembler {
+@@ -1388,20 +1432,29 @@ class TimelineAssembler {
      state: TimelineMessageState,
      fragments: TimelineFragment[],
    ): AgentTimelineItem[] {
@@ -727,7 +742,7 @@ index 72ea55774..103fb40c0 100644
      }
      return this.emitNewContent(state);
    }
-@@ -1446,6 +1499,9 @@ class TimelineAssembler {
+@@ -1457,6 +1510,9 @@ class TimelineAssembler {
        emittedAssistantLength: 0,
        emittedReasoningLength: 0,
        stopped: false,

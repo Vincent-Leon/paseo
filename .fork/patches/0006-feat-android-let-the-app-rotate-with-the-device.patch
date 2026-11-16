@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Vincent Leon <leon@mbp.com>
 Date: Thu, 22 Oct 2026 22:57:29 +0800
-Subject: [PATCH 06/14] feat(android): let the app rotate with the device
+Subject: [PATCH 06/15] feat(android): let the app rotate with the device
 
 The app locks to portrait, which also locks an unfolded foldable or a
 tablet, including the Android build running under HarmonyOS's Android
@@ -15,7 +15,7 @@ device unless rotation lock is on. iOS keeps its configuration.
  create mode 100644 packages/app/plugins/with-android-user-orientation.js
 
 diff --git a/packages/app/app.config.js b/packages/app/app.config.js
-index eb7907e5c..cb45960e5 100644
+index fecdcce31..7f1e5d26a 100644
 --- a/packages/app/app.config.js
 +++ b/packages/app/app.config.js
 @@ -4,6 +4,7 @@ const pkg = require("./package.json");
@@ -26,7 +26,7 @@ index eb7907e5c..cb45960e5 100644
  const withFdroidAutolinking = require("./plugins/with-fdroid-autolinking");
  const withPasteInput = require("./plugins/with-paste-input");
  const withAndroidScroll = require("./modules/paseo-scroll/app.plugin");
-@@ -148,6 +149,7 @@ export default {
+@@ -149,6 +150,7 @@ export default {
        [withAndroidAsyncStorageSize, 64],
        ...buildProfile.cameraPlugins,
        withAndroidOptionalCamera,

@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Vincent Leon <leon@mbp.com>
 Date: Thu, 22 Oct 2026 15:03:59 +0800
-Subject: [PATCH 04/14] feat(usage): tick each usage bar at the share of its
+Subject: [PATCH 04/15] feat(usage): tick each usage bar at the share of its
  window that has elapsed
 
 Usage windows carried how much was used and when they reset, but not how
@@ -266,10 +266,10 @@ index 3090ac79e..86a91b8b0 100644
    it("is pending while a refresh runs, even after an earlier failure", () => {
      expect(resolveUsageRefresh({ isPending: true, error: new Error("boom") })).toBe("pending");
 diff --git a/packages/app/src/usage/model.ts b/packages/app/src/usage/model.ts
-index bbe183dcd..1ea34589a 100644
+index ac2cf62db..68c58e0fc 100644
 --- a/packages/app/src/usage/model.ts
 +++ b/packages/app/src/usage/model.ts
-@@ -18,6 +18,39 @@ export function displayPercent(window: UsageWindow, displayAs: UsageDisplayAs):
+@@ -24,6 +24,39 @@ export function displayPercent(window: UsageWindow, displayAs: UsageDisplayAs):
    return used == null ? null : 100 - used;
  }
  
@@ -310,10 +310,10 @@ index bbe183dcd..1ea34589a 100644
   * A window row's accessible label: what pinning it pins, then what the row shows. The row is a
   * checkbox, so its checked state says whether it is pinned: "Pin Claude Session, 31% · resets in
 diff --git a/packages/app/src/usage/pinned.test.ts b/packages/app/src/usage/pinned.test.ts
-index 410b81575..d7e175b46 100644
+index b78065904..932a6f236 100644
 --- a/packages/app/src/usage/pinned.test.ts
 +++ b/packages/app/src/usage/pinned.test.ts
-@@ -147,6 +147,7 @@ describe("resolvePinnedUsage", () => {
+@@ -148,6 +148,7 @@ describe("resolvePinnedUsage", () => {
            percent: 31,
            percentText: "31%",
            tone: "default",
@@ -321,7 +321,7 @@ index 410b81575..d7e175b46 100644
          },
          {
            key: "claude:default/weekly",
-@@ -155,6 +156,7 @@ describe("resolvePinnedUsage", () => {
+@@ -156,6 +157,7 @@ describe("resolvePinnedUsage", () => {
            percent: 80,
            percentText: "80%",
            tone: "warning",
@@ -329,7 +329,7 @@ index 410b81575..d7e175b46 100644
          },
        ],
      });
-@@ -214,6 +216,29 @@ describe("resolvePinnedUsage", () => {
+@@ -237,6 +239,29 @@ describe("resolvePinnedUsage", () => {
      ]);
    });
  
@@ -360,19 +360,19 @@ index 410b81575..d7e175b46 100644
      const noPercent = report({
        sourceId: "opencode",
 diff --git a/packages/app/src/usage/pinned.ts b/packages/app/src/usage/pinned.ts
-index 21fd4cf06..65a7f8744 100644
+index b725c3e08..8dfa06f53 100644
 --- a/packages/app/src/usage/pinned.ts
 +++ b/packages/app/src/usage/pinned.ts
-@@ -1,7 +1,7 @@
- import type { TFunction } from "i18next";
- import { i18n } from "@/i18n/i18next";
- import { formatPct, formatDisplayPct, formatProviderUsageLabel } from "./format";
--import { displayPercent } from "./model";
-+import { displayElapsedPercent, displayPercent } from "./model";
- import { effectiveUsagePins, type UsagePreferences } from "./preferences";
+@@ -6,7 +6,7 @@ import {
+   formatProviderUsageLabel,
+   formatUsageAccountName,
+ } from "./format";
+-import { displayPercent, resolveUsageSnapshot } from "./model";
++import { displayElapsedPercent, displayPercent, resolveUsageSnapshot } from "./model";
+ import { effectiveUsagePins, usageReportsOn, type UsagePreferences } from "./preferences";
  import { windowTone } from "./tone";
  import type { UsageReportEntry, UsageTone } from "./types";
-@@ -17,6 +17,8 @@ export interface PinnedUsageWindow {
+@@ -22,6 +22,8 @@ export interface PinnedUsageWindow {
    percent: number;
    percentText: string;
    tone: UsageTone;
@@ -381,7 +381,7 @@ index 21fd4cf06..65a7f8744 100644
  }
  
  /** One account's summary windows, under its source's icon. */
-@@ -70,7 +72,7 @@ function groupBySource(reports: readonly UsageReportEntry[]): UsageReportEntry[]
+@@ -70,7 +72,7 @@ function describe(entry: UsageReportEntry, windowLabel: string): string {
  export function resolvePinnedUsage(
    reports: readonly UsageReportEntry[],
    preferences: UsagePreferences,
@@ -389,8 +389,8 @@ index 21fd4cf06..65a7f8744 100644
 +  { t = i18n.t, now = Date.now() }: { t?: TFunction; now?: number } = {},
  ): PinnedUsageSource[] {
    const pins = effectiveUsagePins(preferences, reports);
-   return groupBySource(reports).flatMap((entry) => {
-@@ -91,6 +93,7 @@ export function resolvePinnedUsage(
+   return usageReportsOn(reports, preferences).flatMap((entry) => {
+@@ -92,6 +94,7 @@ export function resolvePinnedUsage(
            percent,
            percentText,
            tone: windowTone(window),
@@ -399,20 +399,20 @@ index 21fd4cf06..65a7f8744 100644
        });
      if (windows.length === 0) return [];
 diff --git a/packages/app/src/usage/sidebar-item.tsx b/packages/app/src/usage/sidebar-item.tsx
-index 437c0a929..0254ca947 100644
+index 32136b063..d61341ede 100644
 --- a/packages/app/src/usage/sidebar-item.tsx
 +++ b/packages/app/src/usage/sidebar-item.tsx
-@@ -32,6 +32,7 @@ import {
+@@ -31,6 +31,7 @@ import {
    type PinnedUsageSource,
  } from "./pinned";
  import { UsageModal } from "./usage-modal";
 +import { useRelativeTimeTick } from "./use-relative-time-tick";
  
- /** Each summary window with data on the usage host, under its source; empty while none has. */
- export function useUsageSummary(): readonly PinnedUsageSource[] {
-@@ -40,7 +41,17 @@ export function useUsageSummary(): readonly PinnedUsageSource[] {
-   const serverId = useUsageHostId();
-   const reports = useUsageHostReports(inSidebar ? serverId : null);
+ const ThemedTriangleAlert = withUnistyles(TriangleAlert);
+ const errorIconColor = (theme: Theme) => ({ color: theme.colors.statusDanger });
+@@ -47,7 +48,17 @@ export function useUsageSummary(): readonly PinnedUsageSource[] {
+     shouldPoll: active && inSidebar && isAppVisible,
+   });
    const { preferences } = useUsageDisplay(reports);
 -  return useMemo(() => resolvePinnedUsage(reports, preferences, t), [preferences, reports, t]);
 +  // The elapsed-time ticks move with the clock, but only windows that know their length have one.
@@ -429,7 +429,7 @@ index 437c0a929..0254ca947 100644
  }
  
  /**
-@@ -189,7 +200,7 @@ function PinnedUsageLine({
+@@ -219,7 +230,7 @@ function PinnedUsageLine({
            <Fragment key={window.key}>
              {layout === "meters" ? (
                <View style={[styles.meterSlot, leadStyle]}>
@@ -638,10 +638,10 @@ index fa23ca9c9..2c2f7c883 100644
      [86400, "day", "d"],
      [3600, "hour", "h"],
 diff --git a/packages/protocol/src/messages.ts b/packages/protocol/src/messages.ts
-index e10617889..02c8e61fd 100644
+index e62cf8357..8cf0629fa 100644
 --- a/packages/protocol/src/messages.ts
 +++ b/packages/protocol/src/messages.ts
-@@ -6424,6 +6424,12 @@ export const ProviderUsageWindowSchema = z.object({
+@@ -6778,6 +6778,12 @@ export const ProviderUsageWindowSchema = z.object({
    usedPct: z.number().nullable().optional(),
    remainingPct: z.number().nullable().optional(),
    resetsAt: z.string().nullable().optional(),
@@ -654,7 +654,7 @@ index e10617889..02c8e61fd 100644
    runsOutAt: z.string().nullable().optional(),
    shortfallPct: z.number().nullable().optional(),
    tone: ProviderUsageToneSchema.optional(),
-@@ -6437,6 +6443,8 @@ export const ProviderUsageBalanceSchema = z.object({
+@@ -6791,6 +6797,8 @@ export const ProviderUsageBalanceSchema = z.object({
    limit: z.number().nullable().optional(),
    unit: z.enum(["usd", "credits", "requests", "tokens"]),
    resetsAt: z.string().nullable().optional(),
@@ -1017,10 +1017,10 @@ index cd2905ca2..b1693cf2c 100644
      }),
    );
 diff --git a/public-docs/plugins/reference.md b/public-docs/plugins/reference.md
-index a5565b71c..523d2faaa 100644
+index 692313bc5..8a093ccda 100644
 --- a/public-docs/plugins/reference.md
 +++ b/public-docs/plugins/reference.md
-@@ -536,8 +536,15 @@ do not establish duration. When the provider omits it, use a neutral name such a
+@@ -538,8 +538,15 @@ do not establish duration. When the provider omits it, use a neutral name such a
  For numeric durations, use `windowFromReportedDuration()` from
  `@getpaseo/plugin/server/usage` (Paseo 0.11+). Pass the reported seconds or `null`, a neutral
  `unknown` identity and name, and an optional stable quota `scope`. The helper derives the ID,

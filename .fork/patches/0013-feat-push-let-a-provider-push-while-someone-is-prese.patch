@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Vincent Leon <leon@mbp.com>
 Date: Sat, 24 Oct 2026 23:47:05 +0800
-Subject: [PATCH 13/14] feat(push): let a provider push while someone is
+Subject: [PATCH 13/15] feat(push): let a provider push while someone is
  present
 
 The daemon pushes only when nobody has used Paseo for three minutes;
@@ -328,10 +328,10 @@ index 59dc71654..2a5cca77d 100644
     * Delivers to every subscription.
     *
 diff --git a/packages/server/src/server/session.ts b/packages/server/src/server/session.ts
-index 8d3d8bb33..7aa7e994c 100644
+index 2570bf81b..273c08c07 100644
 --- a/packages/server/src/server/session.ts
 +++ b/packages/server/src/server/session.ts
-@@ -1581,6 +1581,11 @@ export class Session {
+@@ -1719,6 +1719,11 @@ export class Session {
      return source ? (this.clientSources.get(source)?.activity ?? null) : null;
    }
  
@@ -344,10 +344,10 @@ index 8d3d8bb33..7aa7e994c 100644
      | {
          provider?: string | null;
 diff --git a/packages/server/src/server/websocket-server.ts b/packages/server/src/server/websocket-server.ts
-index 2de803c66..9e7711e18 100644
+index d22b8dfe5..309dc082d 100644
 --- a/packages/server/src/server/websocket-server.ts
 +++ b/packages/server/src/server/websocket-server.ts
-@@ -79,6 +79,7 @@ import {
+@@ -88,6 +88,7 @@ import {
    createPushNotifications,
    type PushNotifications,
    type PushNotificationSender,
@@ -355,7 +355,7 @@ index 2de803c66..9e7711e18 100644
  } from "./push/index.js";
  import { HUAWEI_PROVIDER_ID } from "./push/providers/huawei/provider.js";
  import type { ScriptHealthState } from "./script-health-monitor.js";
-@@ -2862,6 +2863,23 @@ export class VoiceAssistantWebSocketServer {
+@@ -2907,6 +2908,23 @@ export class VoiceAssistantWebSocketServer {
      };
    }
  
@@ -379,7 +379,7 @@ index 2de803c66..9e7711e18 100644
    private async broadcastAgentAttention(params: {
      agentId: string;
      provider: AgentProvider;
-@@ -2904,10 +2922,11 @@ export class VoiceAssistantWebSocketServer {
+@@ -2949,10 +2967,11 @@ export class VoiceAssistantWebSocketServer {
        permissionRequest: findLatestPermissionRequest(agent.pendingPermissions),
      });
  
@@ -392,7 +392,7 @@ index 2de803c66..9e7711e18 100644
        nowMs,
      });
  
-@@ -2915,6 +2934,11 @@ export class VoiceAssistantWebSocketServer {
+@@ -2960,6 +2979,11 @@ export class VoiceAssistantWebSocketServer {
        void this.pushNotificationSender.send(notification).catch((err) => {
          this.logger.warn({ err, agentId: params.agentId }, "Failed to send push notification");
        });
@@ -404,7 +404,7 @@ index 2de803c66..9e7711e18 100644
      }
  
      for (const { ws } of clientEntries) {
-@@ -3008,25 +3032,28 @@ export class VoiceAssistantWebSocketServer {
+@@ -3053,25 +3077,28 @@ export class VoiceAssistantWebSocketServer {
  
      const title = terminalAttentionTitle(params.reason);
      const body = params.terminalName;
