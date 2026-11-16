@@ -1,0 +1,226 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Vincent Leon <leon@mbp.com>
+Date: Mon, 16 Nov 2026 17:27:11 +0800
+Subject: [PATCH 15/15] feat(providers): let a custom provider carry its own
+ icon
+
+Custom providers that extend the same agent all showed that agent's icon,
+so two Codex gateways and the native Codex looked identical in the
+pickers. A provider override can now set icon to an inline SVG, which
+clients already draw for plugin providers, tinted through currentColor.
+The daemon rejects icons that script, handle events or reference
+anything outside the SVG, since the icon reaches every connected client.
+---
+ docs/custom-providers.md                      | 29 +++++++------
+ packages/protocol/src/provider-config.test.ts | 43 +++++++++++++++++++
+ packages/protocol/src/provider-config.ts      | 42 ++++++++++++++++++
+ .../server/agent/provider-registry.test.ts    | 14 ++++++
+ .../src/server/agent/provider-registry.ts     |  3 ++
+ 5 files changed, 118 insertions(+), 13 deletions(-)
+ create mode 100644 packages/protocol/src/provider-config.test.ts
+
+diff --git a/docs/custom-providers.md b/docs/custom-providers.md
+index 1d6d67d45..5a24cdd14 100644
+--- a/docs/custom-providers.md
++++ b/docs/custom-providers.md
+@@ -349,6 +349,8 @@ Example: two different Anthropic accounts as separate profiles:
+ 
+ Each profile appears as a separate provider in the Paseo app. You can select which one to use when launching an agent.
+ 
++Profiles that extend the same provider share its icon. Give each one an `icon` to tell them apart: an inline `<svg>` that fills or strokes with `currentColor`, so it follows the theme. The daemon rejects icons with scripts, event handlers, or links outside the SVG.
++
+ You can also combine profiles with model overrides to pin specific models per profile:
+ 
+ ```json
+@@ -736,19 +738,20 @@ When an `additionalModels` entry has the same `id` as a discovered model, it upd
+ 
+ Every entry under `agents.providers` accepts these fields:
+ 
+-| Field              | Type                      | Required          | Description                                                        |
+-| ------------------ | ------------------------- | ----------------- | ------------------------------------------------------------------ |
+-| `extends`          | `string`                  | Yes (custom only) | Built-in provider ID to inherit from, or `"acp"`                   |
+-| `label`            | `string`                  | Yes (custom only) | Display name in the UI                                             |
+-| `description`      | `string`                  | No                | Short description shown in the UI                                  |
+-| `command`          | `string[]`                | Yes (ACP only)    | Command to spawn the agent process                                 |
+-| `env`              | `Record<string, string>`  | No                | Environment variables to set for the agent process                 |
+-| `options`          | `Record<string, unknown>` | No                | Provider-specific options such as `supportsMcpServers: false`      |
+-| `models`           | `ProviderProfileModel[]`  | No                | Static model list (overrides runtime discovery)                    |
+-| `additionalModels` | `ProviderProfileModel[]`  | No                | Static model additions (merged with runtime discovery or `models`) |
+-| `disallowedTools`  | `string[]`                | No                | Tool names to disable for this provider (e.g. `["WebSearch"]`)     |
+-| `enabled`          | `boolean`                 | No                | Set to `false` to hide the provider (default: `true`)              |
+-| `order`            | `number`                  | No                | Sort order in the provider list                                    |
++| Field              | Type                      | Required          | Description                                                             |
++| ------------------ | ------------------------- | ----------------- | ----------------------------------------------------------------------- |
++| `extends`          | `string`                  | Yes (custom only) | Built-in provider ID to inherit from, or `"acp"`                        |
++| `label`            | `string`                  | Yes (custom only) | Display name in the UI                                                  |
++| `description`      | `string`                  | No                | Short description shown in the UI                                       |
++| `icon`             | `string`                  | No                | Self-contained `<svg>` drawn with `currentColor`; custom providers only |
++| `command`          | `string[]`                | Yes (ACP only)    | Command to spawn the agent process                                      |
++| `env`              | `Record<string, string>`  | No                | Environment variables to set for the agent process                      |
++| `options`          | `Record<string, unknown>` | No                | Provider-specific options such as `supportsMcpServers: false`           |
++| `models`           | `ProviderProfileModel[]`  | No                | Static model list (overrides runtime discovery)                         |
++| `additionalModels` | `ProviderProfileModel[]`  | No                | Static model additions (merged with runtime discovery or `models`)      |
++| `disallowedTools`  | `string[]`                | No                | Tool names to disable for this provider (e.g. `["WebSearch"]`)          |
++| `enabled`          | `boolean`                 | No                | Set to `false` to hide the provider (default: `true`)                   |
++| `order`            | `number`                  | No                | Sort order in the provider list                                         |
+ 
+ ### Model definition
+ 
+diff --git a/packages/protocol/src/provider-config.test.ts b/packages/protocol/src/provider-config.test.ts
+new file mode 100644
+index 000000000..425065e19
+--- /dev/null
++++ b/packages/protocol/src/provider-config.test.ts
+@@ -0,0 +1,43 @@
++import { describe, expect, test } from "vitest";
++import { describeProviderIconProblem, ProviderOverridesSchema } from "./provider-config.js";
++
++const ICON =
++  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="currentColor" d="M2 2h20v20H2z"/></svg>';
++
++function iconIssues(icon: string): string[] {
++  const parsed = ProviderOverridesSchema.safeParse({
++    "codex-gateway": { extends: "codex", label: "Codex (gateway)", icon },
++  });
++  return parsed.success ? [] : parsed.error.issues.map((issue) => issue.path.join("."));
++}
++
++describe("provider icons", () => {
++  test("a custom provider keeps a self-contained SVG icon", () => {
++    const parsed = ProviderOverridesSchema.parse({
++      "codex-gateway": { extends: "codex", label: "Codex (gateway)", icon: ICON },
++    });
++
++    expect(parsed["codex-gateway"]?.icon).toBe(ICON);
++  });
++
++  test("an icon may reference its own gradients and symbols", () => {
++    const icon =
++      '<svg viewBox="0 0 24 24"><defs><linearGradient id="g"/><path id="p" d="M0 0h1v1z"/></defs>' +
++      '<rect fill="url(#g)" width="24" height="24"/><use href="#p"/><use xlink:href = \'#p\'/></svg>';
++
++    expect(describeProviderIconProblem(icon)).toBeNull();
++  });
++
++  test.each([
++    ["not an svg", "<div>icon</div>"],
++    ["script", "<svg><script>alert(1)</script></svg>"],
++    ["event handler", '<svg onload="alert(1)"></svg>'],
++    ["foreign object", "<svg><foreignObject><div/></foreignObject></svg>"],
++    ["external link", '<svg><image href="https://example.com/i.png"/></svg>'],
++    ["external url", '<svg><rect fill="url( https://example.com/p.svg#g)"/></svg>'],
++    ["javascript url", '<svg><a href="javascript:alert(1)"/></svg>'],
++    ["oversized", `<svg>${"<g/>".repeat(9000)}</svg>`],
++  ])("rejects an icon with %s", (_case, icon) => {
++    expect(iconIssues(icon)).toEqual(["codex-gateway.icon"]);
++  });
++});
+diff --git a/packages/protocol/src/provider-config.ts b/packages/protocol/src/provider-config.ts
+index c94f8ca96..174e5bdd8 100644
+--- a/packages/protocol/src/provider-config.ts
++++ b/packages/protocol/src/provider-config.ts
+@@ -52,6 +52,7 @@ export const ProviderOverrideSchema = z.object({
+   extends: z.string().optional(),
+   label: z.string().optional(),
+   description: z.string().optional(),
++  icon: z.string().optional(),
+   command: z.array(z.string().min(1)).min(1).optional(),
+   env: z.record(z.string(), z.string()).optional(),
+   options: z.record(z.string(), z.unknown()).optional(),
+@@ -65,6 +66,36 @@ export const ProviderOverrideSchema = z.object({
+   order: z.number().optional(),
+ });
+ 
++const PROVIDER_ICON_MAX_LENGTH = 32_768;
++
++// Clients draw provider icons with react-native-svg, tinted through currentColor. A configured
++// icon reaches every client connected to the daemon, so it may not run script or pull in
++// anything from outside the document.
++const PROVIDER_ICON_FORBIDDEN: readonly [RegExp, string][] = [
++  [/<\s*script\b/i, "must not contain <script>"],
++  [/<\s*foreignObject\b/i, "must not contain <foreignObject>"],
++  [/\son[a-z]+\s*=/i, "must not contain event handler attributes"],
++  [/javascript:/i, "must not contain javascript: URLs"],
++  [/\bhref\s*=(?!\s*["']?\s*#)/i, "may only link to fragments inside the icon (#id)"],
++  [/url\((?!\s*["']?\s*#)/i, "may only reference fragments inside the icon (url(#id))"],
++  [/@import\b/i, "must not import stylesheets"],
++];
++
++/** Why an `icon` value cannot be used as a provider icon, or null when it can. */
++export function describeProviderIconProblem(icon: string): string | null {
++  const svg = icon.trim();
++  if (svg.length > PROVIDER_ICON_MAX_LENGTH) {
++    return `must be at most ${PROVIDER_ICON_MAX_LENGTH} characters`;
++  }
++  if (!/^<svg[\s>]/i.test(svg) || !/<\/svg>$/i.test(svg)) {
++    return "must be a single <svg> element";
++  }
++  for (const [pattern, problem] of PROVIDER_ICON_FORBIDDEN) {
++    if (pattern.test(svg)) return problem;
++  }
++  return null;
++}
++
+ const BUILTIN_PROVIDER_IDS = ["claude", "codex", "copilot", "opencode", "pi", "omp"] as const;
+ const PROVIDER_ID_PATTERN = /^[a-z][a-z0-9-]*$/;
+ 
+@@ -95,6 +126,17 @@ export const ProviderOverridesSchema = z
+         });
+       }
+ 
++      if (provider.icon !== undefined) {
++        const problem = describeProviderIconProblem(provider.icon);
++        if (problem) {
++          ctx.addIssue({
++            code: z.ZodIssueCode.custom,
++            path: [providerId, "icon"],
++            message: `Provider "${providerId}" icon ${problem}.`,
++          });
++        }
++      }
++
+       if (provider.extends && !validExtendsValues.has(provider.extends)) {
+         ctx.addIssue({
+           code: z.ZodIssueCode.custom,
+diff --git a/packages/server/src/server/agent/provider-registry.test.ts b/packages/server/src/server/agent/provider-registry.test.ts
+index 9a2cb768f..98034d639 100644
+--- a/packages/server/src/server/agent/provider-registry.test.ts
++++ b/packages/server/src/server/agent/provider-registry.test.ts
+@@ -626,6 +626,20 @@ test("new provider extending claude appears in registry", () => {
+   expect(registry.zai.createClient(logger).provider).toBe("zai");
+ });
+ 
++test("a custom provider shows its configured icon instead of its base provider's", () => {
++  const icon = '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M2 2h20v20H2z"/></svg>';
++  const registry = buildProviderRegistry(logger, {
++    providerOverrides: {
++      "codex-gateway": { extends: "codex", label: "Codex (gateway)", icon },
++      "codex-plain": { extends: "codex", label: "Codex (plain)" },
++    },
++  });
++
++  expect(registry["codex-gateway"].iconSvg).toBe(icon);
++  expect(registry["codex-plain"].iconSvg).toBeUndefined();
++  expect(registry.codex.iconSvg).toBeUndefined();
++});
++
+ test("new provider extending codex archives and unarchives its native sessions", async () => {
+   const registry = buildProviderRegistry(logger, {
+     providerOverrides: { "my-codex": { extends: "codex", label: "My Codex" } },
+diff --git a/packages/server/src/server/agent/provider-registry.ts b/packages/server/src/server/agent/provider-registry.ts
+index 0f3c39868..f76049b3a 100644
+--- a/packages/server/src/server/agent/provider-registry.ts
++++ b/packages/server/src/server/agent/provider-registry.ts
+@@ -319,6 +319,9 @@ function createDerivedDefinition(
+     id: providerId,
+     label: override.label,
+     description: override.description ?? baseDefinition.description,
++    // Without its own icon a custom provider shows its base provider's, which leaves several
++    // channels of one agent looking identical.
++    ...(override.icon ? { iconSvg: override.icon.trim() } : {}),
+   };
+ }
+ 
+-- 
+2.50.1 (Apple Git-155)
+

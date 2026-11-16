@@ -22,3 +22,5 @@ packages/server src/server/push/providers/huawei/provider.test.ts
 packages/server src/server/push/token-store.test.ts
 packages/server src/server/push/index.test.ts
 packages/client src/daemon-client.test.ts
+packages/protocol src/provider-config.test.ts
+packages/server src/server/agent/provider-registry.test.ts
