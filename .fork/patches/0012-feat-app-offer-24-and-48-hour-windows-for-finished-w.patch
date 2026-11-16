@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Vincent Leon <leon@mbp.com>
 Date: Sat, 24 Oct 2026 22:40:51 +0800
-Subject: [PATCH 12/14] feat(app): offer 24 and 48 hour windows for finished
+Subject: [PATCH 12/15] feat(app): offer 24 and 48 hour windows for finished
  work
 
 The Done within row in activity grouping now lists 24 hours and 48 hours
@@ -98,10 +98,10 @@ index 4133d26be..06a1aa297 100644
  }
  
 diff --git a/packages/app/src/components/sidebar/display-preferences/menu.tsx b/packages/app/src/components/sidebar/display-preferences/menu.tsx
-index 0984fc268..f35ccd702 100644
+index c6e855fbd..ef29e67fe 100644
 --- a/packages/app/src/components/sidebar/display-preferences/menu.tsx
 +++ b/packages/app/src/components/sidebar/display-preferences/menu.tsx
-@@ -11,7 +11,9 @@ import { View, type PressableStateCallbackType } from "react-native";
+@@ -11,7 +11,9 @@ import type { PressableStateCallbackType } from "react-native";
  import { StyleSheet, withUnistyles } from "react-native-unistyles";
  import {
    Activity,
@@ -111,7 +111,7 @@ index 0984fc268..f35ccd702 100644
    Captions,
    Circle,
    CircleCheck,
-@@ -102,6 +104,8 @@ const ACTIVITY_WINDOW_ICONS: Record<SidebarActivityWindow, OptionIcon> = {
+@@ -105,6 +107,8 @@ const ACTIVITY_WINDOW_ICONS: Record<SidebarActivityWindow, OptionIcon> = {
    "3h": withUnistyles(Clock3),
    "12h": withUnistyles(Clock12),
    today: withUnistyles(CalendarDays),
@@ -120,7 +120,7 @@ index 0984fc268..f35ccd702 100644
  };
  
  const TITLE_SOURCE_ICONS: Record<WorkspaceTitleSource, OptionIcon> = {
-@@ -147,6 +151,8 @@ const ACTIVITY_WINDOW_LABEL_KEYS: Record<SidebarActivityWindow, string> = {
+@@ -150,6 +154,8 @@ const ACTIVITY_WINDOW_LABEL_KEYS: Record<SidebarActivityWindow, string> = {
    "3h": "sidebar.display.activityWindow.threeHours",
    "12h": "sidebar.display.activityWindow.twelveHours",
    today: "sidebar.display.activityWindow.today",
@@ -130,10 +130,10 @@ index 0984fc268..f35ccd702 100644
  
  const TITLE_SOURCE_LABEL_KEYS: Record<WorkspaceTitleSource, string> = {
 diff --git a/packages/app/src/i18n/resources/ar.ts b/packages/app/src/i18n/resources/ar.ts
-index ac6f95e1d..4c3a776e4 100644
+index 2400f25eb..3255fd97f 100644
 --- a/packages/app/src/i18n/resources/ar.ts
 +++ b/packages/app/src/i18n/resources/ar.ts
-@@ -1171,6 +1171,8 @@ export const ar: TranslationResources = {
+@@ -1216,6 +1216,8 @@ export const ar: TranslationResources = {
          threeHours: "تم خلال آخر 3 ساعات",
          twelveHours: "تم خلال آخر 12 ساعة",
          today: "تم اليوم",
@@ -142,7 +142,7 @@ index ac6f95e1d..4c3a776e4 100644
        },
        earlier: {
          title: "أقدم",
-@@ -1201,6 +1203,8 @@ export const ar: TranslationResources = {
+@@ -1246,6 +1248,8 @@ export const ar: TranslationResources = {
          threeHours: "3 ساعات",
          twelveHours: "12 ساعة",
          today: "اليوم",
@@ -152,10 +152,10 @@ index ac6f95e1d..4c3a776e4 100644
        titleSource: {
          label: "العنوان",
 diff --git a/packages/app/src/i18n/resources/en.ts b/packages/app/src/i18n/resources/en.ts
-index f57375b7b..fcedae646 100644
+index 734509f3f..68985bfaa 100644
 --- a/packages/app/src/i18n/resources/en.ts
 +++ b/packages/app/src/i18n/resources/en.ts
-@@ -1179,6 +1179,8 @@ export const en = {
+@@ -1226,6 +1226,8 @@ export const en = {
          threeHours: "Done in the last 3 hours",
          twelveHours: "Done in the last 12 hours",
          today: "Done today",
@@ -164,7 +164,7 @@ index f57375b7b..fcedae646 100644
        },
        earlier: {
          title: "Earlier",
-@@ -1209,6 +1211,8 @@ export const en = {
+@@ -1256,6 +1258,8 @@ export const en = {
          threeHours: "3 hours",
          twelveHours: "12 hours",
          today: "Today",
@@ -174,10 +174,10 @@ index f57375b7b..fcedae646 100644
        titleSource: {
          label: "Title",
 diff --git a/packages/app/src/i18n/resources/es.ts b/packages/app/src/i18n/resources/es.ts
-index 70ac12887..e4082a9df 100644
+index b6c94f1d7..a3892d840 100644
 --- a/packages/app/src/i18n/resources/es.ts
 +++ b/packages/app/src/i18n/resources/es.ts
-@@ -1207,6 +1207,8 @@ export const es: TranslationResources = {
+@@ -1252,6 +1252,8 @@ export const es: TranslationResources = {
          threeHours: "Terminado en las últimas 3 horas",
          twelveHours: "Terminado en las últimas 12 horas",
          today: "Terminado hoy",
@@ -186,7 +186,7 @@ index 70ac12887..e4082a9df 100644
        },
        earlier: {
          title: "Anteriores",
-@@ -1237,6 +1239,8 @@ export const es: TranslationResources = {
+@@ -1282,6 +1284,8 @@ export const es: TranslationResources = {
          threeHours: "3 horas",
          twelveHours: "12 horas",
          today: "Hoy",
@@ -196,10 +196,10 @@ index 70ac12887..e4082a9df 100644
        titleSource: {
          label: "Título",
 diff --git a/packages/app/src/i18n/resources/fr.ts b/packages/app/src/i18n/resources/fr.ts
-index ed5a580ae..dd9898a81 100644
+index d9f0a87b3..b27701489 100644
 --- a/packages/app/src/i18n/resources/fr.ts
 +++ b/packages/app/src/i18n/resources/fr.ts
-@@ -1200,6 +1200,8 @@ export const fr: TranslationResources = {
+@@ -1245,6 +1245,8 @@ export const fr: TranslationResources = {
          threeHours: "Terminé ces 3 dernières heures",
          twelveHours: "Terminé ces 12 dernières heures",
          today: "Terminé aujourd’hui",
@@ -208,7 +208,7 @@ index ed5a580ae..dd9898a81 100644
        },
        earlier: {
          title: "Plus ancien",
-@@ -1230,6 +1232,8 @@ export const fr: TranslationResources = {
+@@ -1275,6 +1277,8 @@ export const fr: TranslationResources = {
          threeHours: "3 heures",
          twelveHours: "12 heures",
          today: "Aujourd’hui",
@@ -218,10 +218,10 @@ index ed5a580ae..dd9898a81 100644
        titleSource: {
          label: "Titre",
 diff --git a/packages/app/src/i18n/resources/ja.ts b/packages/app/src/i18n/resources/ja.ts
-index e03c9b970..cd89d9498 100644
+index e665daa93..ef46c36e0 100644
 --- a/packages/app/src/i18n/resources/ja.ts
 +++ b/packages/app/src/i18n/resources/ja.ts
-@@ -1184,6 +1184,8 @@ export const ja: TranslationResources = {
+@@ -1229,6 +1229,8 @@ export const ja: TranslationResources = {
          threeHours: "過去3時間に完了",
          twelveHours: "過去12時間に完了",
          today: "今日完了",
@@ -230,7 +230,7 @@ index e03c9b970..cd89d9498 100644
        },
        earlier: {
          title: "それ以前",
-@@ -1214,6 +1216,8 @@ export const ja: TranslationResources = {
+@@ -1259,6 +1261,8 @@ export const ja: TranslationResources = {
          threeHours: "3時間",
          twelveHours: "12時間",
          today: "今日",
@@ -240,10 +240,10 @@ index e03c9b970..cd89d9498 100644
        titleSource: {
          label: "タイトル",
 diff --git a/packages/app/src/i18n/resources/ko.ts b/packages/app/src/i18n/resources/ko.ts
-index ce19e6a1f..7f7d79403 100644
+index adbc48f44..ee9c1e1fb 100644
 --- a/packages/app/src/i18n/resources/ko.ts
 +++ b/packages/app/src/i18n/resources/ko.ts
-@@ -1178,6 +1178,8 @@ export const ko: TranslationResources = {
+@@ -1223,6 +1223,8 @@ export const ko: TranslationResources = {
          threeHours: "최근 3시간 내 완료",
          twelveHours: "최근 12시간 내 완료",
          today: "오늘 완료",
@@ -252,7 +252,7 @@ index ce19e6a1f..7f7d79403 100644
        },
        earlier: {
          title: "이전",
-@@ -1208,6 +1210,8 @@ export const ko: TranslationResources = {
+@@ -1253,6 +1255,8 @@ export const ko: TranslationResources = {
          threeHours: "3시간",
          twelveHours: "12시간",
          today: "오늘",
@@ -262,10 +262,10 @@ index ce19e6a1f..7f7d79403 100644
        titleSource: {
          label: "제목",
 diff --git a/packages/app/src/i18n/resources/pt-BR.ts b/packages/app/src/i18n/resources/pt-BR.ts
-index bf4bff50c..2bdbe2229 100644
+index 259f95728..a774659a6 100644
 --- a/packages/app/src/i18n/resources/pt-BR.ts
 +++ b/packages/app/src/i18n/resources/pt-BR.ts
-@@ -1197,6 +1197,8 @@ export const ptBR: TranslationResources = {
+@@ -1242,6 +1242,8 @@ export const ptBR: TranslationResources = {
          threeHours: "Concluído nas últimas 3 horas",
          twelveHours: "Concluído nas últimas 12 horas",
          today: "Concluído hoje",
@@ -274,7 +274,7 @@ index bf4bff50c..2bdbe2229 100644
        },
        earlier: {
          title: "Anteriores",
-@@ -1227,6 +1229,8 @@ export const ptBR: TranslationResources = {
+@@ -1272,6 +1274,8 @@ export const ptBR: TranslationResources = {
          threeHours: "3 horas",
          twelveHours: "12 horas",
          today: "Hoje",
@@ -284,10 +284,10 @@ index bf4bff50c..2bdbe2229 100644
        titleSource: {
          label: "Título",
 diff --git a/packages/app/src/i18n/resources/ru.ts b/packages/app/src/i18n/resources/ru.ts
-index 8b2e8e136..c580207d8 100644
+index 4a976b256..ff8cf5dfb 100644
 --- a/packages/app/src/i18n/resources/ru.ts
 +++ b/packages/app/src/i18n/resources/ru.ts
-@@ -1188,6 +1188,8 @@ export const ru: TranslationResources = {
+@@ -1233,6 +1233,8 @@ export const ru: TranslationResources = {
          threeHours: "Готово за последние 3 часа",
          twelveHours: "Готово за последние 12 часов",
          today: "Готово сегодня",
@@ -296,7 +296,7 @@ index 8b2e8e136..c580207d8 100644
        },
        earlier: {
          title: "Ранее",
-@@ -1218,6 +1220,8 @@ export const ru: TranslationResources = {
+@@ -1263,6 +1265,8 @@ export const ru: TranslationResources = {
          threeHours: "3 часа",
          twelveHours: "12 часов",
          today: "Сегодня",
@@ -306,10 +306,10 @@ index 8b2e8e136..c580207d8 100644
        titleSource: {
          label: "Заголовок",
 diff --git a/packages/app/src/i18n/resources/zh-CN.ts b/packages/app/src/i18n/resources/zh-CN.ts
-index 5cc48e623..942dd7701 100644
+index f36ff8474..ec88bbe44 100644
 --- a/packages/app/src/i18n/resources/zh-CN.ts
 +++ b/packages/app/src/i18n/resources/zh-CN.ts
-@@ -1163,6 +1163,8 @@ export const zhCN: TranslationResources = {
+@@ -1208,6 +1208,8 @@ export const zhCN: TranslationResources = {
          threeHours: "最近 3 小时完成",
          twelveHours: "最近 12 小时完成",
          today: "今天完成",
@@ -318,7 +318,7 @@ index 5cc48e623..942dd7701 100644
        },
        earlier: {
          title: "更早",
-@@ -1193,6 +1195,8 @@ export const zhCN: TranslationResources = {
+@@ -1238,6 +1240,8 @@ export const zhCN: TranslationResources = {
          threeHours: "3 小时",
          twelveHours: "12 小时",
          today: "今天",

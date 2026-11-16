@@ -20,7 +20,7 @@ anything outside the SVG, since the icon reaches every connected client.
  create mode 100644 packages/protocol/src/provider-config.test.ts
 
 diff --git a/docs/custom-providers.md b/docs/custom-providers.md
-index 1d6d67d45..5a24cdd14 100644
+index ef0281ec7..515da9b0d 100644
 --- a/docs/custom-providers.md
 +++ b/docs/custom-providers.md
 @@ -349,6 +349,8 @@ Example: two different Anthropic accounts as separate profiles:
@@ -183,10 +183,10 @@ index c94f8ca96..174e5bdd8 100644
          ctx.addIssue({
            code: z.ZodIssueCode.custom,
 diff --git a/packages/server/src/server/agent/provider-registry.test.ts b/packages/server/src/server/agent/provider-registry.test.ts
-index 9a2cb768f..98034d639 100644
+index f1fda21df..d478add9d 100644
 --- a/packages/server/src/server/agent/provider-registry.test.ts
 +++ b/packages/server/src/server/agent/provider-registry.test.ts
-@@ -626,6 +626,20 @@ test("new provider extending claude appears in registry", () => {
+@@ -629,6 +629,20 @@ test("new provider extending claude appears in registry", () => {
    expect(registry.zai.createClient(logger).provider).toBe("zai");
  });
  
@@ -208,10 +208,10 @@ index 9a2cb768f..98034d639 100644
    const registry = buildProviderRegistry(logger, {
      providerOverrides: { "my-codex": { extends: "codex", label: "My Codex" } },
 diff --git a/packages/server/src/server/agent/provider-registry.ts b/packages/server/src/server/agent/provider-registry.ts
-index 0f3c39868..f76049b3a 100644
+index 2449b9a90..4ad1c243c 100644
 --- a/packages/server/src/server/agent/provider-registry.ts
 +++ b/packages/server/src/server/agent/provider-registry.ts
-@@ -319,6 +319,9 @@ function createDerivedDefinition(
+@@ -320,6 +320,9 @@ function createDerivedDefinition(
      id: providerId,
      label: override.label,
      description: override.description ?? baseDefinition.description,
