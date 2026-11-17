@@ -54,6 +54,9 @@ rm -rf "$release_dir"
 (
   cd "$repo_dir"
   # Auto-discovery off: never pick up an identity from the login keychain.
+  # electron-builder 26.18.0 requires a configured identity before it calls
+  # the custom signer; '-' is only the placeholder that reaches mac-sign.cjs.
+  # The hook overrides it with FORK_SIGN_IDENTITY and FORK_SIGN_KEYCHAIN.
   CSC_IDENTITY_AUTO_DISCOVERY=false \
     FORK_SIGN_IDENTITY="$identity" \
     FORK_SIGN_KEYCHAIN="$FORK_SIGN_KEYCHAIN" \
@@ -64,6 +67,7 @@ rm -rf "$release_dir"
     -c.publish.releaseType=release \
     -c.publish.channel=latest \
     -c.mac.notarize=false \
+    -c.mac.identity=- \
     "-c.mac.sign=$fork_dir/mac-sign.cjs" \
     "-c.mac.entitlements=$work_dir/entitlements.mac.plist" \
     "-c.mac.entitlementsInherit=$work_dir/entitlements.mac.inherit.plist"

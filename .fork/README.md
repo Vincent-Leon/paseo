@@ -51,6 +51,7 @@ Squirrel.Mac installs an update only if the new app satisfies the running app's 
 Two gotchas shape the scripts:
 
 - electron-builder only looks for identities that `security find-identity -v` reports as valid. An untrusted self-signed certificate is not valid, so on arm64 electron-builder quietly falls back to ad-hoc signing. `mac-sign.cjs` names the identity by SHA-1 and calls `@electron/osx-sign` with `identityValidation: false`.
+- electron-builder 26.18.0 returns before invoking a custom signer when `mac.identity` is absent. `build-desktop.sh` therefore passes `-c.mac.identity=-`; the `-` is only a placeholder to reach `mac-sign.cjs`, which then forces the fork certificate SHA-1 and `FORK_SIGN_KEYCHAIN`. The final signer remains the fixed certificate above, and the DR checks stay enabled.
 - A self-signed certificate has no Team ID. Under hardened runtime, library validation then refuses to load `Electron Framework` ("mapping process and mapped file (non-platform) have different Team IDs") and the app aborts at launch. The fork build adds `com.apple.security.cs.disable-library-validation` to copies of upstream's entitlement files. Upstream's files stay untouched.
 
 The build is not notarized. Gatekeeper blocks the first launch of a downloaded copy until you allow it in System Settings → Privacy & Security, or run `xattr -dr com.apple.quarantine /Applications/Paseo.app`.
