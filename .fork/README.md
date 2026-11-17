@@ -52,8 +52,6 @@ Two gotchas shape the scripts:
 
 - Identity discovery only considers identities that `security find-identity -v` reports as valid, so the untrusted self-signed certificate is excluded. With electron-builder 26.18.0, an unselected identity also causes the custom signer hook to be skipped. `build-desktop.sh` therefore passes `-c.mac.identity=-` only to enter `mac-sign.cjs`; the hook forces the fork certificate SHA-1, `FORK_SIGN_KEYCHAIN`, and `identityValidation: false`.
 - The fork's fixed certificate remains the signer and the build retains its designated-requirement (DR) checks. A self-signed certificate has no Team ID, so the fork build also adds `com.apple.security.cs.disable-library-validation` to copies of upstream's entitlement files; upstream's files stay untouched.
-- A self-signed certificate has no Team ID. Under hardened runtime, library validation then refuses to load `Electron Framework` ("mapping process and mapped file (non-platform) have different Team IDs") and the app aborts at launch. The fork build adds `com.apple.security.cs.disable-library-validation` to copies of upstream's entitlement files. Upstream's files stay untouched.
-
 The build is not notarized. Gatekeeper blocks the first launch of a downloaded copy until you allow it in System Settings → Privacy & Security, or run `xattr -dr com.apple.quarantine /Applications/Paseo.app`.
 
 ### Windows
