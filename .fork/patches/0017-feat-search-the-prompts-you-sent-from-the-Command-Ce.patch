@@ -1,0 +1,1808 @@
+From f7de6067547f50ab7b90c4639616fb88ed56b1e6 Mon Sep 17 00:00:00 2001
+From: Vincent Leon <leon@mbp.com>
+Date: Tue, 24 Nov 2026 12:23:52 +0800
+Subject: [PATCH 17/17] feat: search the prompts you sent from the Command
+ Center
+
+Command Center now lists "Your messages" for a query: prompts you sent in any chat on any
+connected host, archived chats included, newest first. Selecting one opens its chat. Replies
+are not searched.
+
+The daemon reads prompts straight from the provider transcripts on disk (Claude Code project
+transcripts, Codex rollouts under sessions/ and archived_sessions/), so no chat is resumed to
+search it. Each transcript is read once and then only from where the last read stopped; the
+prompts and offsets persist in prompt-search-index.json, so a restart does not reread the
+history. Injected user-role content is left out: Paseo notifications, slash-command output,
+system reminders, compaction summaries, the Codex AGENTS.md preamble, and chats of subagents
+and background agents, whose prompts another agent wrote.
+
+New RPC agent.prompts.search.{request,response}, gated on server_info.features.promptSearch.
+---
+ .../app/src/command-center/command-center.tsx | 103 ++++-
+ .../src/command-center/prompt-search.test.ts  |  37 ++
+ .../app/src/command-center/prompt-search.ts   |  86 ++++
+ packages/app/src/command-center/results.ts    |  15 +
+ .../app/src/command-center/sections.test.ts   |  33 +-
+ packages/app/src/command-center/sections.ts   |  17 +-
+ packages/app/src/i18n/resources/ar.ts         |   1 +
+ packages/app/src/i18n/resources/en.ts         |   1 +
+ packages/app/src/i18n/resources/es.ts         |   1 +
+ packages/app/src/i18n/resources/fr.ts         |   1 +
+ packages/app/src/i18n/resources/ja.ts         |   1 +
+ packages/app/src/i18n/resources/ko.ts         |   1 +
+ packages/app/src/i18n/resources/pt-BR.ts      |   1 +
+ packages/app/src/i18n/resources/ru.ts         |   1 +
+ packages/app/src/i18n/resources/zh-CN.ts      |   1 +
+ packages/client/src/daemon-client.ts          |  20 +
+ packages/protocol/src/messages.ts             |  41 ++
+ .../src/server/agent/prompt-search.test.ts    | 297 +++++++++++++
+ .../server/src/server/agent/prompt-search.ts  | 418 ++++++++++++++++++
+ .../server/agent/provider-snapshot-manager.ts |   8 +
+ .../authorization/operation-permissions.ts    |   2 +
+ .../src/server/prompt-search.e2e.test.ts      |  92 ++++
+ packages/server/src/server/session.ts         |  42 +-
+ .../server/src/server/websocket-server.ts     |  11 +
+ 24 files changed, 1218 insertions(+), 13 deletions(-)
+ create mode 100644 packages/app/src/command-center/prompt-search.test.ts
+ create mode 100644 packages/app/src/command-center/prompt-search.ts
+ create mode 100644 packages/server/src/server/agent/prompt-search.test.ts
+ create mode 100644 packages/server/src/server/agent/prompt-search.ts
+ create mode 100644 packages/server/src/server/prompt-search.e2e.test.ts
+
+diff --git a/packages/app/src/command-center/command-center.tsx b/packages/app/src/command-center/command-center.tsx
+index 8d92e779b..f96231730 100644
+--- a/packages/app/src/command-center/command-center.tsx
++++ b/packages/app/src/command-center/command-center.tsx
+@@ -24,7 +24,7 @@ import {
+   useSyncExternalStore,
+ } from "react";
+ import { useTranslation } from "react-i18next";
+-import { Check, ChevronRight } from "lucide-react-native";
++import { Check, ChevronRight, MessageSquare } from "lucide-react-native";
+ import { StyleSheet, withUnistyles } from "react-native-unistyles";
+ import { BottomSheetFlatList, type BottomSheetFlatListMethods } from "@gorhom/bottom-sheet";
+ import { resolveAgentLabel } from "@/agent-presentation";
+@@ -59,6 +59,7 @@ import { createProjectIconTarget } from "@/projects/icon-target";
+ import { useProjectIcons } from "@/projects/icons";
+ import { OverlayLayerProvider, useGlobalOverlayLayer } from "@/lib/overlay-root";
+ import { useHostRuntimeConnectionStatuses, useHosts } from "@/runtime/host-runtime";
++import { useSessionStore } from "@/stores/session-store";
+ import { useHydratedWorkspaceServerIds } from "@/stores/session-store-hooks";
+ import { useKeyboardShortcutsStore } from "@/stores/keyboard-shortcuts-store";
+ import { useSidebarViewStore } from "@/stores/sidebar-view-store";
+@@ -87,7 +88,9 @@ import {
+   joinSubtitleParts,
+   projectCommandCenterRows,
+   type CommandCenterFileResult,
++  type CommandCenterPromptResult,
+   type CommandCenterListRow,
++  type CommandCenterContributionResult,
+   type CommandCenterResult,
+   type CommandCenterWorkspaceAgent,
+   type CommandCenterWorkspaceResult,
+@@ -101,6 +104,7 @@ import {
+ } from "./tabs";
+ import { createCommandCenterInteraction, type CommandCenterInteraction } from "./interaction";
+ import { useWorkspaceFileSearch } from "./workspace-file-search";
++import { usePromptSearch, type PromptSearchHit } from "./prompt-search";
+ 
+ const ThemedBottomSheetTextInput = withUnistyles(TextInput, (theme) => ({
+   placeholderTextColor: theme.colors.foregroundMuted,
+@@ -112,6 +116,9 @@ const ThemedCheck = withUnistyles(Check, (theme) => ({ color: theme.colors.foreg
+ const ThemedChevronRight = withUnistyles(ChevronRight, (theme) => ({
+   color: theme.colors.foregroundMuted,
+ }));
++const ThemedMessageSquare = withUnistyles(MessageSquare, (theme) => ({
++  color: theme.colors.foregroundMuted,
++}));
+ const ThemedLoadingSpinner = withUnistyles(LoadingSpinner, (theme) => ({
+   color: theme.colors.foregroundMuted,
+ }));
+@@ -132,6 +139,56 @@ function createAgentResultAction(serverId: string) {
+   };
+ }
+ 
++type ChoicePresentation = Extract<
++  CommandCenterContributionResult["contribution"]["presentation"],
++  { kind: "choice" }
++>;
++
++function resultAccessibilityLabel(
++  result: CommandCenterResult,
++  choice: ChoicePresentation | null,
++): string | undefined {
++  if (result.kind === "file") return [result.title, result.subtitle].filter(Boolean).join(" ");
++  if (result.kind === "prompt") return [result.text, result.subtitle].filter(Boolean).join(" ");
++  return choice?.path.join(" › ");
++}
++
++function resultTestId(
++  result: CommandCenterResult,
++  choice: ChoicePresentation | null,
++): string | undefined {
++  if (result.kind === "file") return `command-center-file-row-${result.filePath}`;
++  if (result.kind === "prompt") return `command-center-prompt-row-${result.id}`;
++  return choice?.testId;
++}
++
++/** A row per matched prompt: the prompt, then the chat and workspace it was sent in. */
++function usePromptRows(hits: readonly PromptSearchHit[]): CommandCenterPromptResult[] {
++  const hosts = useHosts();
++  return useMemo(() => {
++    const serverLabelById = new Map(hosts.map((host) => [host.serverId, host.label]));
++    const sessions = useSessionStore.getState().sessions;
++    return hits.map((hit) => {
++      const workspace = hit.workspaceId
++        ? sessions[hit.serverId]?.workspaces.get(hit.workspaceId)
++        : undefined;
++      return {
++        kind: "prompt",
++        id: `prompt:${hit.serverId}:${hit.agentId}:${hit.sentAt}`,
++        text: hit.text,
++        subtitle: joinSubtitleParts([
++          resolveAgentLabel(hit.agentTitle),
++          workspace ? (workspace.title ?? workspace.name) : null,
++          hosts.length > 1 ? serverLabelById.get(hit.serverId) : null,
++        ]),
++        sentAt: new Date(hit.sentAt),
++        archived: hit.archived,
++        run: () => createAgentResultAction(hit.serverId)(hit.agentId),
++      };
++    });
++  }, [hits, hosts]);
++}
++
+ const NO_WORKSPACE_AGENTS: readonly CommandCenterWorkspaceAgent[] = [];
+ 
+ /** Each workspace's titled agents, most recent first, keyed `serverId:workspaceId`. */
+@@ -378,6 +435,8 @@ function useCommandCenterState(
+     enabled: open && listsWorkspaces,
+   });
+   const workspaceRows = useWorkspaceRows(open, archivedSearch.workspaces);
++  const promptSearch = usePromptSearch(query, { enabled: open && tab === "all" });
++  const prompts = usePromptRows(promptSearch.hits);
+   const [rankWorkspaces] = useState(createWorkspaceRanker);
+   const currentWorkspaceId = activeWorkspace
+     ? `workspace:${activeWorkspace.serverId}:${activeWorkspace.workspaceId}`
+@@ -420,10 +479,12 @@ function useCommandCenterState(
+             currentWorkspaceId,
+             contributions: snapshot.contributions,
+             files,
++            prompts,
+             titles: {
+               recentWorkspaces: t("shell.commandCenter.recentWorkspaces"),
+               workspaces: t("shell.commandCenter.workspaces"),
+               files: t("shell.commandCenter.files"),
++              prompts: t("shell.commandCenter.prompts"),
+             },
+           })
+         : [],
+@@ -432,6 +493,7 @@ function useCommandCenterState(
+       currentWorkspaceId,
+       files,
+       open,
++      prompts,
+       query,
+       rankWorkspaces,
+       showBackground,
+@@ -446,7 +508,9 @@ function useCommandCenterState(
+     [listMetrics, sections],
+   );
+   const loading =
+-    fileSearchLoading || (listsWorkspaces && (archivedSearch.pending || workspaceRows.loading));
++    fileSearchLoading ||
++    promptSearch.pending ||
++    (listsWorkspaces && (archivedSearch.pending || workspaceRows.loading));
+   useLayoutEffect(() => {
+     interaction.update({ open, tab, query, projection, loading });
+   }, [interaction, open, tab, query, projection, loading]);
+@@ -566,10 +630,7 @@ const ResultRow = memo(function ResultRow({
+     result.kind === "contribution" && result.contribution.presentation.kind === "choice"
+       ? result.contribution.presentation
+       : null;
+-  const accessibilityLabel =
+-    result.kind === "file"
+-      ? [result.title, result.subtitle].filter(Boolean).join(" ")
+-      : choice?.path.join(" › ");
++  const accessibilityLabel = resultAccessibilityLabel(result, choice);
+   const accessibilityState = useMemo(
+     () => (isNative && choice ? { selected: choice.selected } : undefined),
+     [choice],
+@@ -590,9 +651,7 @@ const ResultRow = memo(function ResultRow({
+       accessibilityLabel={accessibilityLabel}
+       accessibilityState={accessibilityState}
+       aria-pressed={isWeb ? choice?.selected : undefined}
+-      testID={
+-        result.kind === "file" ? `command-center-file-row-${result.filePath}` : choice?.testId
+-      }
++      testID={resultTestId(result, choice)}
+     >
+       {(state) => (
+         <ResultContent
+@@ -760,6 +819,32 @@ function ResultContent({
+       </View>
+     );
+   }
++  if (result.kind === "prompt") {
++    return (
++      <View style={styles.rowContent} testID="command-center-prompt-result">
++        <View style={styles.rowMain}>
++          <View style={styles.iconSlot}>
++            <ThemedMessageSquare size={16} strokeWidth={2} />
++          </View>
++          <View style={styles.textContent}>
++            <QueryHighlightedText
++              query={query}
++              text={result.text}
++              style={styles.title}
++              numberOfLines={1}
++            />
++            <SubtitleWithTimestamp
++              query={query}
++              subtitle={result.subtitle}
++              activityAt={result.sentAt}
++              testID="command-center-prompt-subtitle"
++            />
++          </View>
++        </View>
++        {result.archived ? <ArchivedBadge /> : null}
++      </View>
++    );
++  }
+   if (result.kind === "workspace") {
+     const key = result.id.slice("workspace:".length);
+     return (
+diff --git a/packages/app/src/command-center/prompt-search.test.ts b/packages/app/src/command-center/prompt-search.test.ts
+new file mode 100644
+index 000000000..07eb4238a
+--- /dev/null
++++ b/packages/app/src/command-center/prompt-search.test.ts
+@@ -0,0 +1,37 @@
++import { describe, expect, it } from "vitest";
++import { mergePromptHits } from "./prompt-search";
++
++function match(agentId: string, sentAt: string) {
++  return {
++    agentId,
++    agentTitle: null,
++    workspaceId: null,
++    provider: "claude",
++    text: agentId,
++    sentAt,
++    archived: false,
++  };
++}
++
++describe("mergePromptHits", () => {
++  it("merges hosts newest first and keeps the limit", () => {
++    const hits = mergePromptHits(
++      [
++        {
++          serverId: "a",
++          matches: [
++            match("a1", "2026-11-24T01:00:00.000Z"),
++            match("a2", "2026-11-22T01:00:00.000Z"),
++          ],
++        },
++        { serverId: "b", matches: [match("b1", "2026-11-23T01:00:00.000Z")] },
++      ],
++      2,
++    );
++
++    expect(hits.map((hit) => [hit.serverId, hit.agentId])).toEqual([
++      ["a", "a1"],
++      ["b", "b1"],
++    ]);
++  });
++});
+diff --git a/packages/app/src/command-center/prompt-search.ts b/packages/app/src/command-center/prompt-search.ts
+new file mode 100644
+index 000000000..c30b3ec41
+--- /dev/null
++++ b/packages/app/src/command-center/prompt-search.ts
+@@ -0,0 +1,86 @@
++import type { AgentPromptSearchMatch } from "@getpaseo/protocol/messages";
++import { useMemo } from "react";
++import { useShallow } from "zustand/shallow";
++import { useFetchQuery } from "@/data/query";
++import { useDebouncedValue } from "@/hooks/use-debounced-value";
++import {
++  getHostRuntimeStore,
++  useHostRuntimeConnectionStatuses,
++  useHosts,
++} from "@/runtime/host-runtime";
++import { useSessionStore } from "@/stores/session-store";
++
++const SEARCH_DEBOUNCE_MS = 250;
++const PROMPT_LIMIT = 20;
++const NO_HITS: PromptSearchHit[] = [];
++
++export interface PromptSearchHit extends AgentPromptSearchMatch {
++  serverId: string;
++}
++
++export interface PromptSearch {
++  /** Newest first across hosts. Empty without a query. */
++  hits: readonly PromptSearchHit[];
++  /** Still searching for the current query, debounce included. */
++  pending: boolean;
++}
++
++/** Newest first, at most `limit`, from every host's answer. */
++export function mergePromptHits(
++  answers: ReadonlyArray<{ serverId: string; matches: readonly AgentPromptSearchMatch[] }>,
++  limit = PROMPT_LIMIT,
++): PromptSearchHit[] {
++  return answers
++    .flatMap(({ serverId, matches }) => matches.map((match) => ({ ...match, serverId })))
++    .sort((left, right) => right.sentAt.localeCompare(left.sentAt))
++    .slice(0, limit);
++}
++
++/**
++ * Prompts you sent that match `query`, searched on every online host that supports prompt
++ * search. A host that fails or predates it contributes nothing; the other hosts still answer.
++ */
++export function usePromptSearch(query: string, options: { enabled: boolean }): PromptSearch {
++  const trimmed = query.trim();
++  const search = useDebouncedValue(trimmed, SEARCH_DEBOUNCE_MS);
++  const hosts = useHosts();
++  const serverIds = useMemo(() => hosts.map((host) => host.serverId), [hosts]);
++  const capableIds = useSessionStore(
++    useShallow((state) =>
++      serverIds.filter((id) => state.sessions[id]?.serverInfo?.features?.promptSearch === true),
++    ),
++  );
++  const statuses = useHostRuntimeConnectionStatuses(capableIds);
++  const onlineIds = useMemo(
++    () => capableIds.filter((id) => statuses.get(id) === "online"),
++    [capableIds, statuses],
++  );
++  const wanted = options.enabled && trimmed.length > 0 && onlineIds.length > 0;
++  const enabled = wanted && search.length > 0;
++
++  const result = useFetchQuery({
++    queryKey: ["command-center", "prompt-search", onlineIds, search],
++    enabled,
++    dataShape: "list",
++    staleTimeMs: 30_000,
++    queryFn: async () => {
++      const runtime = getHostRuntimeStore();
++      const answers = await Promise.allSettled(
++        onlineIds.map(async (serverId) => {
++          const client = runtime.getClient(serverId);
++          if (!client) return { serverId, matches: [] };
++          const payload = await client.searchAgentPrompts({ query: search, limit: PROMPT_LIMIT });
++          return { serverId, matches: payload.error ? [] : payload.matches };
++        }),
++      );
++      return mergePromptHits(
++        answers.flatMap((answer) => (answer.status === "fulfilled" ? [answer.value] : [])),
++      );
++    },
++  });
++
++  return {
++    hits: enabled && result.data ? result.data : NO_HITS,
++    pending: wanted && (search !== trimmed || result.isFetching),
++  };
++}
+diff --git a/packages/app/src/command-center/results.ts b/packages/app/src/command-center/results.ts
+index 8fe63c9b1..e29123e6c 100644
+--- a/packages/app/src/command-center/results.ts
++++ b/packages/app/src/command-center/results.ts
+@@ -94,6 +94,19 @@ export interface CommandCenterFileResult {
+   run(): void;
+ }
+ 
++/** A prompt you sent, found by the host's prompt search. Opens the chat it was sent in. */
++export interface CommandCenterPromptResult {
++  kind: "prompt";
++  id: string;
++  /** The prompt, shortened around the match. */
++  text: string;
++  /** The chat it was sent in, and that chat's workspace. */
++  subtitle: string;
++  sentAt: Date;
++  archived: boolean;
++  run(): void;
++}
++
+ export interface CommandCenterContributionResult {
+   kind: "contribution";
+   id: string;
+@@ -106,6 +119,7 @@ export interface CommandCenterContributionResult {
+ export type CommandCenterResult =
+   | CommandCenterWorkspaceResult
+   | CommandCenterFileResult
++  | CommandCenterPromptResult
+   | CommandCenterContributionResult;
+ 
+ export interface CommandCenterResultSection {
+@@ -203,6 +217,7 @@ function contributionSearchFields(
+ function resultLineCount(result: CommandCenterResult): 1 | 2 | 3 {
+   if (result.kind === "workspace") return result.matchedAgent ? 3 : 2;
+   if (result.kind === "file") return 1;
++  if (result.kind === "prompt") return 2;
+   const presentation = result.contribution.presentation;
+   return presentation.kind === "action" && presentation.subtitle ? 2 : 1;
+ }
+diff --git a/packages/app/src/command-center/sections.test.ts b/packages/app/src/command-center/sections.test.ts
+index 23071c444..d712139fc 100644
+--- a/packages/app/src/command-center/sections.test.ts
++++ b/packages/app/src/command-center/sections.test.ts
+@@ -1,6 +1,10 @@
+ import { describe, expect, it } from "vitest";
+ import type { CommandCenterContribution } from "./contributions";
+-import type { CommandCenterFileResult, CommandCenterWorkspaceResult } from "./results";
++import type {
++  CommandCenterFileResult,
++  CommandCenterPromptResult,
++  CommandCenterWorkspaceResult,
++} from "./results";
+ import { COMMAND_CENTER_LIST_METRICS } from "./list-metrics";
+ import { projectCommandCenterRows } from "./results";
+ import { buildCommandCenterSections } from "./sections";
+@@ -60,6 +64,16 @@ const file: CommandCenterFileResult = {
+   run: () => undefined,
+ };
+ 
++const prompt: CommandCenterPromptResult = {
++  kind: "prompt",
++  id: "prompt:server:agent-1:2026-11-24T01:00:00.000Z",
++  text: "fix the sidebar time",
++  subtitle: "Sidebar",
++  sentAt: new Date("2026-11-24T01:00:00.000Z"),
++  archived: false,
++  run: () => undefined,
++};
++
+ const workspaces = [
+   workspace("current", { daysAgo: 0 }),
+   workspace("payments", { daysAgo: 1, title: "Payments refactor" }),
+@@ -92,7 +106,13 @@ function listed(
+     currentWorkspaceId: "workspace:server:current",
+     contributions,
+     files: [file],
+-    titles: { recentWorkspaces: "Recent workspaces", workspaces: "Workspaces", files: "Files" },
++    prompts: query ? [prompt] : [],
++    titles: {
++      recentWorkspaces: "Recent workspaces",
++      workspaces: "Workspaces",
++      files: "Files",
++      prompts: "Your messages",
++    },
+   });
+   return projectCommandCenterRows(sections, COMMAND_CENTER_LIST_METRICS.desktop).rows.map((row) =>
+     row.kind === "section" ? `# ${row.title ?? ""}` : row.key,
+@@ -134,6 +154,15 @@ describe("command center tabs", () => {
+     expect(rows).not.toContain("# Recent workspaces");
+   });
+ 
++  it("All lists your matching messages after workspaces and before files for a query", () => {
++    const rows = listed("all", "ing");
++    const messages = rows.indexOf("# Your messages");
++    expect(rows[messages + 1]).toBe(prompt.id);
++    expect(messages).toBeGreaterThan(rows.lastIndexOf("workspace:server:billing"));
++    expect(messages).toBeLessThan(rows.indexOf("# Files"));
++    expect(listed("all", "")).not.toContain("# Your messages");
++  });
++
+   it("Workspaces lists every workspace, current included, most recent first", () => {
+     expect(listed("workspaces", "")).toEqual([
+       "# Workspaces",
+diff --git a/packages/app/src/command-center/sections.ts b/packages/app/src/command-center/sections.ts
+index d66ef56ea..8a8b14c18 100644
+--- a/packages/app/src/command-center/sections.ts
++++ b/packages/app/src/command-center/sections.ts
+@@ -4,6 +4,7 @@ import {
+   LEADING_SECTION_BAND,
+   PINNED_SECTION_BAND,
+   type CommandCenterFileResult,
++  type CommandCenterPromptResult,
+   type CommandCenterResultSection,
+   type CommandCenterWorkspaceResult,
+ } from "./results";
+@@ -20,6 +21,7 @@ export interface CommandCenterSectionTitles {
+   recentWorkspaces: string;
+   workspaces: string;
+   files: string;
++  prompts: string;
+ }
+ 
+ export interface CommandCenterSectionsInput {
+@@ -44,6 +46,8 @@ export interface CommandCenterSectionsInput {
+   currentWorkspaceId: string | null;
+   contributions: readonly CommandCenterContribution[];
+   files: readonly CommandCenterFileResult[];
++  /** Prompts you sent that the hosts matched. Empty without a query. */
++  prompts: readonly CommandCenterPromptResult[];
+   titles: CommandCenterSectionTitles;
+ }
+ 
+@@ -95,6 +99,17 @@ function filesSection(input: CommandCenterSectionsInput): CommandCenterResultSec
+   };
+ }
+ 
++function promptsSection(input: CommandCenterSectionsInput): CommandCenterResultSection {
++  // Matched by the daemon like files, so pinned rather than scored.
++  return {
++    id: "prompts",
++    band: PINNED_SECTION_BAND,
++    rank: 3,
++    title: input.titles.prompts,
++    results: input.prompts,
++  };
++}
++
+ /**
+  * The sections a tab shows. All mixes every kind and leads with recent workspaces until
+  * something is typed; every other tab lists everything of its one kind.
+@@ -106,7 +121,7 @@ export function buildCommandCenterSections(
+     case "all": {
+       const actions = buildContributionSections(input.contributions, input.query);
+       if (!input.query.trim()) return [recentWorkspacesSection(input), ...actions];
+-      return [...actions, workspacesSection(input), filesSection(input)];
++      return [...actions, workspacesSection(input), promptsSection(input), filesSection(input)];
+     }
+     case "workspaces":
+       return [workspacesSection(input)];
+diff --git a/packages/app/src/i18n/resources/ar.ts b/packages/app/src/i18n/resources/ar.ts
+index 8437ce81d..4100e03ac 100644
+--- a/packages/app/src/i18n/resources/ar.ts
++++ b/packages/app/src/i18n/resources/ar.ts
+@@ -101,6 +101,7 @@ export const ar: TranslationResources = {
+       files: "الملفات",
+       workspaces: "مساحات العمل",
+       recentWorkspaces: "مساحات العمل الأخيرة",
++      prompts: "رسائلك",
+       tabs: {
+         all: "الكل",
+         workspaces: "مساحات العمل",
+diff --git a/packages/app/src/i18n/resources/en.ts b/packages/app/src/i18n/resources/en.ts
+index d25685f39..6c79448b9 100644
+--- a/packages/app/src/i18n/resources/en.ts
++++ b/packages/app/src/i18n/resources/en.ts
+@@ -99,6 +99,7 @@ export const en = {
+       files: "Files",
+       workspaces: "Workspaces",
+       recentWorkspaces: "Recent workspaces",
++      prompts: "Your messages",
+       tabs: {
+         all: "All",
+         workspaces: "Workspaces",
+diff --git a/packages/app/src/i18n/resources/es.ts b/packages/app/src/i18n/resources/es.ts
+index 0ce3746ed..470c74670 100644
+--- a/packages/app/src/i18n/resources/es.ts
++++ b/packages/app/src/i18n/resources/es.ts
+@@ -102,6 +102,7 @@ export const es: TranslationResources = {
+       files: "Archivos",
+       workspaces: "Espacios de trabajo",
+       recentWorkspaces: "Espacios de trabajo recientes",
++      prompts: "Tus mensajes",
+       tabs: {
+         all: "Todo",
+         workspaces: "Espacios de trabajo",
+diff --git a/packages/app/src/i18n/resources/fr.ts b/packages/app/src/i18n/resources/fr.ts
+index b783a02dc..bd8d4bca4 100644
+--- a/packages/app/src/i18n/resources/fr.ts
++++ b/packages/app/src/i18n/resources/fr.ts
+@@ -102,6 +102,7 @@ export const fr: TranslationResources = {
+       files: "Fichiers",
+       workspaces: "Espaces de travail",
+       recentWorkspaces: "Espaces de travail récents",
++      prompts: "Vos messages",
+       tabs: {
+         all: "Tout",
+         workspaces: "Espaces de travail",
+diff --git a/packages/app/src/i18n/resources/ja.ts b/packages/app/src/i18n/resources/ja.ts
+index d710369e2..a6d3ff47f 100644
+--- a/packages/app/src/i18n/resources/ja.ts
++++ b/packages/app/src/i18n/resources/ja.ts
+@@ -102,6 +102,7 @@ export const ja: TranslationResources = {
+       files: "ファイル",
+       workspaces: "ワークスペース",
+       recentWorkspaces: "最近のワークスペース",
++      prompts: "送信したメッセージ",
+       tabs: {
+         all: "すべて",
+         workspaces: "ワークスペース",
+diff --git a/packages/app/src/i18n/resources/ko.ts b/packages/app/src/i18n/resources/ko.ts
+index 9d02d4ac8..24c5b25b9 100644
+--- a/packages/app/src/i18n/resources/ko.ts
++++ b/packages/app/src/i18n/resources/ko.ts
+@@ -101,6 +101,7 @@ export const ko: TranslationResources = {
+       files: "파일",
+       workspaces: "워크스페이스",
+       recentWorkspaces: "최근 워크스페이스",
++      prompts: "보낸 메시지",
+       tabs: {
+         all: "전체",
+         workspaces: "워크스페이스",
+diff --git a/packages/app/src/i18n/resources/pt-BR.ts b/packages/app/src/i18n/resources/pt-BR.ts
+index 6483664e4..1da62d3ed 100644
+--- a/packages/app/src/i18n/resources/pt-BR.ts
++++ b/packages/app/src/i18n/resources/pt-BR.ts
+@@ -102,6 +102,7 @@ export const ptBR: TranslationResources = {
+       files: "Arquivos",
+       workspaces: "Espaços de trabalho",
+       recentWorkspaces: "Espaços de trabalho recentes",
++      prompts: "Suas mensagens",
+       tabs: {
+         all: "Tudo",
+         workspaces: "Espaços de trabalho",
+diff --git a/packages/app/src/i18n/resources/ru.ts b/packages/app/src/i18n/resources/ru.ts
+index 4c2764f4f..52d3bfa03 100644
+--- a/packages/app/src/i18n/resources/ru.ts
++++ b/packages/app/src/i18n/resources/ru.ts
+@@ -102,6 +102,7 @@ export const ru: TranslationResources = {
+       files: "Файлы",
+       workspaces: "Рабочие пространства",
+       recentWorkspaces: "Недавние рабочие пространства",
++      prompts: "Ваши сообщения",
+       tabs: {
+         all: "Все",
+         workspaces: "Рабочие пространства",
+diff --git a/packages/app/src/i18n/resources/zh-CN.ts b/packages/app/src/i18n/resources/zh-CN.ts
+index 4bb7e7a5c..1324c439e 100644
+--- a/packages/app/src/i18n/resources/zh-CN.ts
++++ b/packages/app/src/i18n/resources/zh-CN.ts
+@@ -101,6 +101,7 @@ export const zhCN: TranslationResources = {
+       files: "文件",
+       workspaces: "工作区",
+       recentWorkspaces: "最近的工作区",
++      prompts: "我发过的消息",
+       tabs: {
+         all: "全部",
+         workspaces: "工作区",
+diff --git a/packages/client/src/daemon-client.ts b/packages/client/src/daemon-client.ts
+index 3fabdc2d8..f318ac653 100644
+--- a/packages/client/src/daemon-client.ts
++++ b/packages/client/src/daemon-client.ts
+@@ -91,6 +91,7 @@ import type {
+   ValidateBranchResponse,
+   BranchSuggestionsResponse,
+   ForgeSearchResponse,
++  AgentPromptsSearchResponse,
+   ForgeSearchRequest,
+   GitHubSearchResponse,
+   GitHubSearchRequest,
+@@ -587,6 +588,7 @@ type StashListPayload = StashListResponse["payload"];
+ type ValidateBranchPayload = ValidateBranchResponse["payload"];
+ type BranchSuggestionsPayload = BranchSuggestionsResponse["payload"];
+ type ForgeSearchPayload = ForgeSearchResponse["payload"];
++export type AgentPromptsSearchPayload = AgentPromptsSearchResponse["payload"];
+ type GitHubSearchPayload = GitHubSearchResponse["payload"];
+ type DirectorySuggestionsPayload = DirectorySuggestionsResponse["payload"];
+ type PaseoWorktreeListPayload = PaseoWorktreeListResponse["payload"];
+@@ -5585,6 +5587,24 @@ export class DaemonClient {
+     });
+   }
+ 
++  /** Your sent prompts matching `query`, newest first. Gate on `server_info.features.promptSearch`. */
++  async searchAgentPrompts(
++    options: { query: string; limit?: number },
++    requestId?: string,
++  ): Promise<AgentPromptsSearchPayload> {
++    return this.sendCorrelatedSessionRequest({
++      requestId,
++      message: {
++        type: "agent.prompts.search.request",
++        query: options.query,
++        limit: options.limit,
++      },
++      responseType: "agent.prompts.search.response",
++      // The first search after a daemon start reads every chat's transcript once.
++      timeout: 60000,
++    });
++  }
++
+   async searchGitHub(
+     options: { cwd: string; query: string; limit?: number; kinds?: GitHubSearchRequest["kinds"] },
+     requestId?: string,
+diff --git a/packages/protocol/src/messages.ts b/packages/protocol/src/messages.ts
+index 2a42c43c9..2a6a9153e 100644
+--- a/packages/protocol/src/messages.ts
++++ b/packages/protocol/src/messages.ts
+@@ -2765,6 +2765,17 @@ export const ForgeSearchRequestSchema = z.object({
+   requestId: z.string(),
+ });
+ 
++/**
++ * Search the prompts you sent, across every chat on the host, archived ones included. Matches
++ * only your own messages, never replies. Gated on `server_info.features.promptSearch`.
++ */
++export const AgentPromptsSearchRequestSchema = z.object({
++  type: z.literal("agent.prompts.search.request"),
++  query: z.string(),
++  limit: z.number().int().min(1).max(50).optional(),
++  requestId: z.string(),
++});
++
+ // COMPAT(githubSearchRpc): legacy RPC retained when forge.search.* shipped in
+ // v0.2.0-beta.1. Stop serving and consuming it after 2027-01-17 once client
+ // and daemon floors are >= v0.2.0.
+@@ -3678,6 +3689,7 @@ export const SessionInboundMessageSchema = z.discriminatedUnion("type", [
+   ValidateBranchRequestSchema,
+   BranchSuggestionsRequestSchema,
+   ForgeSearchRequestSchema,
++  AgentPromptsSearchRequestSchema,
+   GitHubSearchRequestSchema,
+   DirectorySuggestionsRequestSchema,
+   PaseoWorktreeListRequestSchema,
+@@ -3980,6 +3992,8 @@ export const ServerInfoStatusPayloadSchema = z
+         // and github_search fallback after 2027-01-17 once the supported daemon
+         // floor is >= v0.2.0.
+         forgeSearch: z.boolean().optional(),
++        // COMPAT(promptSearch): added in the fork's 0.16.2 patch set; remove gate after 2027-05-24.
++        promptSearch: z.boolean().optional(),
+         // COMPAT(daemonStatusRpc): added in v0.1.76, remove gate after 2026-11-18.
+         daemonStatusRpc: z.boolean().optional(),
+         // COMPAT(daemonConfigReload): added in v0.4.0, remove gate after 2027-02-14.
+@@ -6452,6 +6466,29 @@ export const ForgeSearchResponseSchema = z.object({
+   payload: ForgeSearchResponsePayloadSchema,
+ });
+ 
++export const AgentPromptSearchMatchSchema = z.object({
++  agentId: z.string(),
++  agentTitle: z.string().nullable(),
++  workspaceId: z.string().nullable(),
++  provider: z.string(),
++  /** The matching prompt, shortened around the first match. */
++  text: z.string(),
++  sentAt: z.string(),
++  archived: z.boolean(),
++});
++
++export const AgentPromptsSearchResponseSchema = z.object({
++  type: z.literal("agent.prompts.search.response"),
++  payload: z.object({
++    /** Newest first. */
++    matches: z.array(AgentPromptSearchMatchSchema),
++    /** More prompts matched than `limit` returned. */
++    truncated: z.boolean(),
++    error: z.string().nullable(),
++    requestId: z.string(),
++  }),
++});
++
+ // COMPAT(githubSearchRpc): legacy RPC retained when forge.search.* shipped in
+ // v0.2.0-beta.1. Stop serving and consuming it after 2027-01-17 once client
+ // and daemon floors are >= v0.2.0.
+@@ -7625,6 +7662,7 @@ export const SessionOutboundMessageSchema = z.discriminatedUnion("type", [
+   ValidateBranchResponseSchema,
+   BranchSuggestionsResponseSchema,
+   ForgeSearchResponseSchema,
++  AgentPromptsSearchResponseSchema,
+   GitHubSearchResponseSchema,
+   DirectorySuggestionsResponseSchema,
+   PaseoWorktreeListResponseSchema,
+@@ -8058,6 +8096,9 @@ export type ForgeSearchItem = z.infer<typeof ForgeSearchItemSchema>;
+ export type ForgeSearchKind = "issue" | "change_request";
+ export type ForgeSearchRequest = z.infer<typeof ForgeSearchRequestSchema>;
+ export type ForgeSearchResponse = z.infer<typeof ForgeSearchResponseSchema>;
++export type AgentPromptsSearchRequest = z.infer<typeof AgentPromptsSearchRequestSchema>;
++export type AgentPromptsSearchResponse = z.infer<typeof AgentPromptsSearchResponseSchema>;
++export type AgentPromptSearchMatch = z.infer<typeof AgentPromptSearchMatchSchema>;
+ export type GitHubSearchItem = z.infer<typeof GitHubSearchItemSchema>;
+ export type GitHubSearchKind = z.infer<typeof GitHubSearchKindSchema>;
+ export type GitHubSearchRequest = z.infer<typeof GitHubSearchRequestSchema>;
+diff --git a/packages/server/src/server/agent/prompt-search.test.ts b/packages/server/src/server/agent/prompt-search.test.ts
+new file mode 100644
+index 000000000..e2a9da176
+--- /dev/null
++++ b/packages/server/src/server/agent/prompt-search.test.ts
+@@ -0,0 +1,297 @@
++import { appendFile, mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
++import { tmpdir } from "node:os";
++import path from "node:path";
++import pino from "pino";
++import { afterEach, beforeEach, describe, expect, it } from "vitest";
++import type { StoredAgentRecord } from "./agent-storage.js";
++import {
++  claudePromptFromLine,
++  cleanPrompt,
++  codexPromptFromLine,
++  PromptSearchIndex,
++  promptSnippet,
++  readNewPrompts,
++} from "./prompt-search.js";
++import { claudeProjectDirSync } from "./providers/claude/project-dir.js";
++
++const logger = pino({ level: "silent" });
++
++function claudeUser(text: unknown, timestamp: string, extra: Record<string, unknown> = {}) {
++  return JSON.stringify({
++    type: "user",
++    timestamp,
++    message: { role: "user", content: text },
++    ...extra,
++  });
++}
++
++function codexUser(text: string, timestamp: string) {
++  return JSON.stringify({
++    timestamp,
++    type: "response_item",
++    payload: { type: "message", role: "user", content: [{ type: "input_text", text }] },
++  });
++}
++
++describe("cleanPrompt", () => {
++  it("drops a message that is only an injected block", () => {
++    expect(
++      cleanPrompt('<paseo-system version="1" kind="agent-notification">done</paseo-system>'),
++    ).toBeNull();
++    expect(cleanPrompt("<command-name>/compact</command-name>")).toBeNull();
++  });
++
++  it("keeps what you typed after leading injected blocks", () => {
++    expect(cleanPrompt("<system-reminder>be brief</system-reminder>\n修一下侧栏时间")).toBe(
++      "修一下侧栏时间",
++    );
++  });
++
++  it("drops the Codex AGENTS.md preamble", () => {
++    expect(cleanPrompt("# AGENTS.md instructions for /repo\n\nfollow these")).toBeNull();
++  });
++});
++
++describe("transcript lines", () => {
++  it("reads a typed Claude prompt and skips tool results, meta and sidechain lines", () => {
++    const at = "2026-11-24T01:00:00.000Z";
++    expect(claudePromptFromLine(JSON.parse(claudeUser("hello", at)))).toEqual({
++      text: "hello",
++      sentAt: at,
++    });
++    expect(
++      claudePromptFromLine(
++        JSON.parse(claudeUser([{ type: "tool_result", tool_use_id: "t", content: "ok" }], at)),
++      ),
++    ).toBeNull();
++    expect(claudePromptFromLine(JSON.parse(claudeUser("x", at, { isMeta: true })))).toBeNull();
++    expect(claudePromptFromLine(JSON.parse(claudeUser("x", at, { isSidechain: true })))).toBeNull();
++    expect(
++      claudePromptFromLine(
++        JSON.parse(
++          claudeUser("This session is being continued from a previous conversation", at, {
++            isCompactSummary: true,
++            isVisibleInTranscriptOnly: true,
++          }),
++        ),
++      ),
++    ).toBeNull();
++  });
++
++  it("reads a Codex user message item and the older user_message event", () => {
++    const at = "2026-11-24T01:00:00.000Z";
++    expect(codexPromptFromLine(JSON.parse(codexUser("实现搜索", at)))).toEqual({
++      text: "实现搜索",
++      sentAt: at,
++    });
++    expect(
++      codexPromptFromLine({
++        timestamp: at,
++        type: "event_msg",
++        payload: { type: "user_message", message: "旧格式" },
++      }),
++    ).toEqual({ text: "旧格式", sentAt: at });
++  });
++});
++
++describe("promptSnippet", () => {
++  it("returns a short prompt whole and windows a long one around the match", () => {
++    expect(promptSnippet("  short\n prompt ", "short")).toBe("short prompt");
++    const long = `${"a".repeat(300)} needle ${"b".repeat(300)}`;
++    const snippet = promptSnippet(long, "needle");
++    expect(snippet).toContain("needle");
++    expect(snippet.startsWith("…")).toBe(true);
++    expect(snippet.endsWith("…")).toBe(true);
++  });
++});
++
++describe("readNewPrompts", () => {
++  let dir: string;
++  beforeEach(async () => {
++    dir = await mkdtemp(path.join(tmpdir(), "prompt-search-read-"));
++  });
++  afterEach(async () => {
++    await rm(dir, { recursive: true, force: true });
++  });
++
++  it("reads complete lines only, then continues from where it stopped", async () => {
++    const file = path.join(dir, "t.jsonl");
++    const first = claudeUser("first", "2026-11-24T01:00:00.000Z");
++    const second = claudeUser("second", "2026-11-24T01:01:00.000Z");
++    await writeFile(file, `${first}\n${second.slice(0, 20)}`);
++    const state = { format: "claude" as const, offset: 0, prompts: [] };
++
++    await readNewPrompts(file, state);
++    expect(state.prompts.map((p) => p.text)).toEqual(["first"]);
++    expect(state.offset).toBe(Buffer.byteLength(`${first}\n`));
++
++    await appendFile(file, `${second.slice(20)}\n`);
++    await readNewPrompts(file, state);
++    expect(state.prompts.map((p) => p.text)).toEqual(["first", "second"]);
++  });
++
++  it("starts over when the file was rewritten shorter", async () => {
++    const file = path.join(dir, "t.jsonl");
++    await writeFile(file, `${claudeUser("old one that is long", "2026-11-24T01:00:00.000Z")}\n`);
++    const state = { format: "claude" as const, offset: 0, prompts: [] };
++    await readNewPrompts(file, state);
++    await writeFile(file, `${claudeUser("new", "2026-11-24T02:00:00.000Z")}\n`);
++
++    await readNewPrompts(file, state);
++    expect(state.prompts.map((p) => p.text)).toEqual(["new"]);
++  });
++
++  it("keeps one of a Codex prompt written as both an item and an event", async () => {
++    const file = path.join(dir, "rollout.jsonl");
++    const at = "2026-11-24T01:00:00.000Z";
++    await writeFile(
++      file,
++      `${codexUser("same", at)}\n${JSON.stringify({ timestamp: at, type: "event_msg", payload: { type: "user_message", message: "same" } })}\n`,
++    );
++    const state = { format: "codex" as const, offset: 0, prompts: [] };
++    await readNewPrompts(file, state);
++    expect(state.prompts).toHaveLength(1);
++  });
++});
++
++describe("PromptSearchIndex", () => {
++  let root: string;
++  let workspace: string;
++  let claudeDir: string;
++  let codexHome: string;
++
++  beforeEach(async () => {
++    root = await realpath(await mkdtemp(path.join(tmpdir(), "prompt-search-index-")));
++    workspace = path.join(root, "repo");
++    claudeDir = path.join(root, "claude");
++    codexHome = path.join(root, "codex");
++    await mkdir(workspace, { recursive: true });
++  });
++  afterEach(async () => {
++    await rm(root, { recursive: true, force: true });
++  });
++
++  function record(overrides: Partial<StoredAgentRecord> & { id: string }): StoredAgentRecord {
++    return {
++      provider: "claude",
++      cwd: workspace,
++      title: null,
++      workspaceId: "wks_1",
++      archivedAt: null,
++      ...overrides,
++    } as StoredAgentRecord;
++  }
++
++  async function writeClaude(sessionId: string, lines: string[]) {
++    const dir = claudeProjectDirSync(workspace, { configDir: claudeDir });
++    await mkdir(dir, { recursive: true });
++    await writeFile(path.join(dir, `${sessionId}.jsonl`), `${lines.join("\n")}\n`);
++  }
++
++  async function writeCodex(threadId: string, lines: string[], archived = false) {
++    const dir = path.join(
++      codexHome,
++      archived ? "archived_sessions" : "sessions",
++      "2026",
++      "11",
++      "24",
++    );
++    await mkdir(dir, { recursive: true });
++    await writeFile(
++      path.join(dir, `rollout-2026-11-24T01-00-00-${threadId}.jsonl`),
++      `${lines.join("\n")}\n`,
++    );
++  }
++
++  function index(records: StoredAgentRecord[]) {
++    return new PromptSearchIndex({
++      listAgentRecords: async () => records,
++      listProviderEnvironments: () => [{ CLAUDE_CONFIG_DIR: claudeDir, CODEX_HOME: codexHome }],
++      cacheFile: path.join(root, "prompt-search-index.json"),
++      logger,
++    });
++  }
++
++  it("finds prompts across Claude and Codex chats, newest first, every term required", async () => {
++    const claudeSession = "11111111-1111-4111-8111-111111111111";
++    const codexThread = "01a1d922-baee-73c0-aa8c-2f69e66d27ae";
++    await writeClaude(claudeSession, [
++      claudeUser("侧栏时间不对", "2026-11-24T01:00:00.000Z"),
++      JSON.stringify({
++        type: "assistant",
++        timestamp: "2026-11-24T01:00:05.000Z",
++        message: { role: "assistant", content: "侧栏时间已修好" },
++      }),
++    ]);
++    await writeCodex(
++      codexThread,
++      [codexUser("再看看侧栏时间排序", "2026-11-24T02:00:00.000Z")],
++      true,
++    );
++    const records = [
++      record({
++        id: "a1",
++        title: "侧栏",
++        persistence: { provider: "claude", sessionId: claudeSession },
++      }),
++      record({
++        id: "a2",
++        provider: "codex-sub2",
++        archivedAt: "2026-11-24T03:00:00.000Z",
++        persistence: {
++          provider: "codex-sub2",
++          sessionId: codexThread,
++          metadata: { provider: "codex" },
++        },
++      }),
++    ];
++
++    const result = await index(records).search("侧栏 时间");
++
++    expect(result.matches.map((m) => [m.agentId, m.text])).toEqual([
++      ["a2", "再看看侧栏时间排序"],
++      ["a1", "侧栏时间不对"],
++    ]);
++    expect(result.matches[0].archived).toBe(true);
++    expect((await index(records).search("侧栏 回复")).matches).toEqual([]);
++  });
++
++  it("serves a restarted daemon from the saved index and reads only what was appended", async () => {
++    const session = "22222222-2222-4222-8222-222222222222";
++    await writeClaude(session, [claudeUser("first prompt", "2026-11-24T01:00:00.000Z")]);
++    const records = [record({ id: "a1", persistence: { provider: "claude", sessionId: session } })];
++    await index(records).search("prompt");
++
++    const dir = claudeProjectDirSync(workspace, { configDir: claudeDir });
++    await appendFile(
++      path.join(dir, `${session}.jsonl`),
++      `${claudeUser("second prompt", "2026-11-24T02:00:00.000Z")}\n`,
++    );
++
++    const result = await index(records).search("prompt");
++    expect(result.matches.map((m) => m.text)).toEqual(["second prompt", "first prompt"]);
++  });
++
++  it("leaves out subagents and background agents, whose prompts another agent wrote", async () => {
++    const session = "44444444-4444-4444-8444-444444444444";
++    await writeClaude(session, [claudeUser("implement the parser", "2026-11-24T01:00:00.000Z")]);
++    const persistence = { provider: "claude", sessionId: session };
++    const sub = record({ id: "sub", persistence, labels: { "paseo.parent-agent-id": "root" } });
++    const bg = record({ id: "bg", persistence, background: true });
++
++    expect((await index([sub, bg]).search("parser")).matches).toEqual([]);
++  });
++
++  it("reports truncation past the limit", async () => {
++    const session = "33333333-3333-4333-8333-333333333333";
++    await writeClaude(session, [
++      claudeUser("deploy one", "2026-11-24T01:00:00.000Z"),
++      claudeUser("deploy two", "2026-11-24T02:00:00.000Z"),
++    ]);
++    const records = [record({ id: "a1", persistence: { provider: "claude", sessionId: session } })];
++
++    const result = await index(records).search("deploy", 1);
++    expect(result.matches.map((m) => m.text)).toEqual(["deploy two"]);
++    expect(result.truncated).toBe(true);
++  });
++});
+diff --git a/packages/server/src/server/agent/prompt-search.ts b/packages/server/src/server/agent/prompt-search.ts
+new file mode 100644
+index 000000000..7318cbcdc
+--- /dev/null
++++ b/packages/server/src/server/agent/prompt-search.ts
+@@ -0,0 +1,418 @@
++import { open, readdir, readFile, stat } from "node:fs/promises";
++import { homedir } from "node:os";
++import path from "node:path";
++import type { Logger } from "pino";
++import { z } from "zod";
++import { getParentAgentIdFromLabels } from "@getpaseo/protocol/agent-labels";
++import type { AgentPromptSearchMatch } from "@getpaseo/protocol/messages";
++import { writeJsonFileAtomic } from "../atomic-file.js";
++import type { StoredAgentRecord } from "./agent-storage.js";
++import { claudeConfigDir, claudeTranscriptPath } from "./providers/claude/project-dir.js";
++
++/**
++ * Searches the prompts you sent, read straight from the provider transcripts on disk (Claude
++ * Code's `projects/<dir>/<session>.jsonl`, Codex's `sessions/**\/rollout-*-<thread>.jsonl`).
++ * Nothing is resumed to read them: reopening a closed chat restamps its activity time, and a
++ * provider runtime per chat would be far heavier than reading a file.
++ *
++ * Transcripts only grow, so each one is read once and then from where the last read stopped.
++ * The prompts and read offsets persist in `cacheFile`, so a daemon restart does not reread
++ * gigabytes of history.
++ */
++
++const READ_CHUNK_BYTES = 4 * 1024 * 1024;
++const MAX_PROMPT_CHARS = 20_000;
++const SNIPPET_CHARS = 160;
++const MISSING_TRANSCRIPT_RETRY_MS = 10 * 60 * 1000;
++const DEFAULT_LIMIT = 20;
++// Bump when the rules for what counts as your prompt change: the saved index holds prompts already
++// filtered, so a new rule only reaches old transcripts through a rebuild.
++const CACHE_VERSION = 1;
++
++type TranscriptFormat = "claude" | "codex";
++
++export interface IndexedPrompt {
++  text: string;
++  sentAt: string;
++}
++
++interface TranscriptState {
++  format: TranscriptFormat;
++  /** Bytes consumed: always the end of the last complete line read. */
++  offset: number;
++  prompts: IndexedPrompt[];
++}
++
++const TranscriptStateSchema = z.object({
++  format: z.enum(["claude", "codex"]),
++  offset: z.number().int().nonnegative(),
++  prompts: z.array(z.object({ text: z.string(), sentAt: z.string() })),
++});
++
++const CacheFileSchema = z.object({
++  version: z.literal(CACHE_VERSION),
++  transcripts: z.record(z.string(), TranscriptStateSchema),
++});
++
++export interface PromptSearchResult {
++  matches: AgentPromptSearchMatch[];
++  truncated: boolean;
++}
++
++export interface PromptSearchDeps {
++  listAgentRecords(): Promise<StoredAgentRecord[]>;
++  /**
++   * Environments the configured providers launch with. Their CLAUDE_CONFIG_DIR and CODEX_HOME
++   * say where transcripts are written besides the defaults.
++   */
++  listProviderEnvironments(): ReadonlyArray<Record<string, string | undefined>>;
++  cacheFile: string;
++  logger: Logger;
++}
++
++// Blocks the provider or Paseo injects into the user role: Paseo notifications, task and
++// slash-command output, system reminders, Codex's environment and instruction preambles.
++const INJECTED_BLOCK = /^\s*<([a-zA-Z][\w-]*)\b[^>]*>[\s\S]*?<\/\1>\s*/;
++const AGENTS_PREAMBLE = /^\s*# AGENTS\.md instructions\b/;
++
++/** What you typed, without injected blocks around it. Null when nothing you typed is left. */
++export function cleanPrompt(raw: string): string | null {
++  let text = raw;
++  for (;;) {
++    const match = INJECTED_BLOCK.exec(text);
++    if (!match) break;
++    text = text.slice(match[0].length);
++  }
++  if (AGENTS_PREAMBLE.test(text)) return null;
++  const trimmed = text.trim();
++  if (!trimmed) return null;
++  return trimmed.length > MAX_PROMPT_CHARS ? trimmed.slice(0, MAX_PROMPT_CHARS) : trimmed;
++}
++
++function textParts(content: unknown, partType: string): string[] {
++  if (typeof content === "string") return [content];
++  if (!Array.isArray(content)) return [];
++  return content.flatMap((part) =>
++    part && typeof part === "object" && (part as { type?: unknown }).type === partType
++      ? [String((part as { text?: unknown }).text ?? "")]
++      : [],
++  );
++}
++
++/**
++ * A Claude Code transcript line's prompt: a top-level user message with text you typed. Meta
++ * lines, subagent sidechains and the summary Claude Code writes after compacting the context
++ * are user-role too.
++ */
++export function claudePromptFromLine(entry: Record<string, unknown>): IndexedPrompt | null {
++  if (
++    entry.type !== "user" ||
++    entry.isMeta === true ||
++    entry.isSidechain === true ||
++    entry.isCompactSummary === true ||
++    entry.isVisibleInTranscriptOnly === true
++  ) {
++    return null;
++  }
++  const message = entry.message as { role?: unknown; content?: unknown } | undefined;
++  if (!message || message.role !== "user" || typeof entry.timestamp !== "string") return null;
++  const text = cleanPrompt(textParts(message.content, "text").join("\n"));
++  return text ? { text, sentAt: entry.timestamp } : null;
++}
++
++/** A Codex rollout line's prompt: a user-role message item, or the older user_message event. */
++export function codexPromptFromLine(entry: Record<string, unknown>): IndexedPrompt | null {
++  if (typeof entry.timestamp !== "string") return null;
++  const payload = entry.payload as Record<string, unknown> | undefined;
++  if (!payload) return null;
++  let raw: string | null = null;
++  if (entry.type === "response_item" && payload.type === "message" && payload.role === "user") {
++    raw = textParts(payload.content, "input_text").join("\n");
++  } else if (entry.type === "event_msg" && payload.type === "user_message") {
++    raw = typeof payload.message === "string" ? payload.message : null;
++  }
++  const text = raw === null ? null : cleanPrompt(raw);
++  return text ? { text, sentAt: entry.timestamp } : null;
++}
++
++// Cheap substring tests that rule out most lines before JSON.parse.
++const LINE_PREFILTER: Record<TranscriptFormat, (line: string) => boolean> = {
++  claude: (line) => line.includes('"type":"user"'),
++  codex: (line) => line.includes('"role":"user"') || line.includes('"user_message"'),
++};
++
++const LINE_PARSERS: Record<
++  TranscriptFormat,
++  (entry: Record<string, unknown>) => IndexedPrompt | null
++> = {
++  claude: claudePromptFromLine,
++  codex: codexPromptFromLine,
++};
++
++/**
++ * Older Codex versions wrote a prompt both as a message item and as a user_message event. Keep
++ * one: a prompt whose text repeats the previous one within a few seconds is that echo.
++ */
++function isEcho(previous: IndexedPrompt | undefined, next: IndexedPrompt): boolean {
++  if (!previous || previous.text !== next.text) return false;
++  return Math.abs(Date.parse(next.sentAt) - Date.parse(previous.sentAt)) < 5_000;
++}
++
++/** Reads the complete lines after `state.offset` and appends their prompts. */
++export async function readNewPrompts(filePath: string, state: TranscriptState): Promise<void> {
++  const handle = await open(filePath, "r");
++  try {
++    const { size } = await handle.stat();
++    if (size < state.offset) {
++      // Rewritten rather than appended to: start over.
++      state.offset = 0;
++      state.prompts = [];
++    }
++    const buffer = Buffer.alloc(READ_CHUNK_BYTES);
++    let carry = Buffer.alloc(0);
++    let position = state.offset;
++    while (position < size) {
++      const { bytesRead } = await handle.read(
++        buffer,
++        0,
++        Math.min(READ_CHUNK_BYTES, size - position),
++        position,
++      );
++      if (bytesRead === 0) break;
++      position += bytesRead;
++      const chunk = carry.length ? Buffer.concat([carry, buffer.subarray(0, bytesRead)]) : buffer;
++      const end = carry.length ? chunk.length : bytesRead;
++      const lastNewline = chunk.lastIndexOf(0x0a, end - 1);
++      if (lastNewline < 0) {
++        carry = Buffer.from(chunk.subarray(0, end));
++        continue;
++      }
++      const complete = chunk.subarray(0, lastNewline + 1).toString("utf8");
++      carry = Buffer.from(chunk.subarray(lastNewline + 1, end));
++      state.offset = position - carry.length;
++      for (const line of complete.split("\n")) {
++        if (!line || !LINE_PREFILTER[state.format](line)) continue;
++        let entry: unknown;
++        try {
++          entry = JSON.parse(line);
++        } catch {
++          continue;
++        }
++        if (!entry || typeof entry !== "object") continue;
++        const prompt = LINE_PARSERS[state.format](entry as Record<string, unknown>);
++        if (prompt && !isEcho(state.prompts.at(-1), prompt)) state.prompts.push(prompt);
++      }
++    }
++  } finally {
++    await handle.close();
++  }
++}
++
++function normalize(text: string): string {
++  return text.toLocaleLowerCase();
++}
++
++/** The prompt shortened to a window around the first matched term, whitespace collapsed. */
++export function promptSnippet(text: string, term: string): string {
++  const collapsed = text.replace(/\s+/g, " ").trim();
++  if (collapsed.length <= SNIPPET_CHARS) return collapsed;
++  const at = Math.max(0, normalize(collapsed).indexOf(term));
++  const start = Math.max(
++    0,
++    Math.min(at - Math.floor(SNIPPET_CHARS / 4), collapsed.length - SNIPPET_CHARS),
++  );
++  const window = collapsed.slice(start, start + SNIPPET_CHARS);
++  return `${start > 0 ? "…" : ""}${window}${start + SNIPPET_CHARS < collapsed.length ? "…" : ""}`;
++}
++
++function transcriptFormat(record: StoredAgentRecord): TranscriptFormat | null {
++  const native = record.persistence?.metadata?.provider ?? record.provider;
++  return native === "claude" || native === "codex" ? native : null;
++}
++
++async function exists(filePath: string): Promise<boolean> {
++  try {
++    await stat(filePath);
++    return true;
++  } catch {
++    return false;
++  }
++}
++
++async function collectRollouts(dir: string, into: Map<string, string>): Promise<void> {
++  let entries;
++  try {
++    entries = await readdir(dir, { withFileTypes: true });
++  } catch {
++    return;
++  }
++  for (const entry of entries) {
++    const full = path.join(dir, entry.name);
++    if (entry.isDirectory()) {
++      await collectRollouts(full, into);
++      continue;
++    }
++    // rollout-<timestamp>-<thread id>.jsonl; the thread id is the last five UUID groups.
++    const match = /-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i.exec(
++      entry.name,
++    );
++    if (entry.name.startsWith("rollout-") && match) into.set(match[1].toLowerCase(), full);
++  }
++}
++
++export class PromptSearchIndex {
++  private transcripts = new Map<string, TranscriptState>();
++  private transcriptByAgent = new Map<string, string>();
++  private missingSince = new Map<string, number>();
++  private rollouts: Map<string, string> | null = null;
++  private loaded = false;
++  private refreshing: Promise<void> | null = null;
++
++  constructor(private readonly deps: PromptSearchDeps) {}
++
++  async search(query: string, limit = DEFAULT_LIMIT): Promise<PromptSearchResult> {
++    const terms = normalize(query).split(/\s+/).filter(Boolean);
++    if (terms.length === 0) return { matches: [], truncated: false };
++    const records = await this.refresh();
++    const found: AgentPromptSearchMatch[] = [];
++    for (const record of records) {
++      const transcript = this.transcriptByAgent.get(record.id);
++      const state = transcript ? this.transcripts.get(transcript) : undefined;
++      if (!state) continue;
++      for (const prompt of state.prompts) {
++        const haystack = normalize(prompt.text);
++        if (!terms.every((term) => haystack.includes(term))) continue;
++        found.push({
++          agentId: record.id,
++          agentTitle: record.title ?? null,
++          workspaceId: record.workspaceId ?? null,
++          provider: record.provider,
++          text: promptSnippet(prompt.text, terms[0]),
++          sentAt: prompt.sentAt,
++          archived: Boolean(record.archivedAt),
++        });
++      }
++    }
++    found.sort((a, b) => b.sentAt.localeCompare(a.sentAt));
++    return { matches: found.slice(0, limit), truncated: found.length > limit };
++  }
++
++  /**
++   * Brings every chat's transcript up to date. Concurrent searches share one refresh. Subagents
++   * and background agents are left out: what their transcripts hold in the user role was written
++   * by the agent that started or drives them, not by you.
++   */
++  private async refresh(): Promise<StoredAgentRecord[]> {
++    const records = (await this.deps.listAgentRecords()).filter(
++      (record) =>
++        !record.internal &&
++        !record.background &&
++        !getParentAgentIdFromLabels(record.labels) &&
++        record.persistence?.sessionId &&
++        transcriptFormat(record),
++    );
++    if (!this.refreshing) {
++      this.refreshing = this.update(records).finally(() => {
++        this.refreshing = null;
++      });
++    }
++    await this.refreshing;
++    return records;
++  }
++
++  private async update(records: StoredAgentRecord[]): Promise<void> {
++    await this.load();
++    this.rollouts = null;
++    let changed = false;
++    for (const record of records) {
++      const transcript = await this.locate(record);
++      if (!transcript) continue;
++      const format = transcriptFormat(record)!;
++      const state = this.transcripts.get(transcript) ?? { format, offset: 0, prompts: [] };
++      const before = state.offset;
++      try {
++        await readNewPrompts(transcript, state);
++      } catch (error) {
++        this.deps.logger.warn({ err: error, transcript }, "Failed to read transcript prompts");
++        continue;
++      }
++      this.transcripts.set(transcript, state);
++      if (state.offset !== before) changed = true;
++    }
++    if (changed) await this.save();
++  }
++
++  private async locate(record: StoredAgentRecord): Promise<string | null> {
++    const known = this.transcriptByAgent.get(record.id);
++    if (known && (await exists(known))) return known;
++    const missing = this.missingSince.get(record.id);
++    if (missing && Date.now() - missing < MISSING_TRANSCRIPT_RETRY_MS) return null;
++    const sessionId = record.persistence!.sessionId;
++    const found =
++      transcriptFormat(record) === "claude"
++        ? await this.locateClaude(record, sessionId)
++        : await this.locateCodex(sessionId);
++    if (found) {
++      this.transcriptByAgent.set(record.id, found);
++      this.missingSince.delete(record.id);
++    } else {
++      this.missingSince.set(record.id, Date.now());
++    }
++    return found;
++  }
++
++  private async locateClaude(record: StoredAgentRecord, sessionId: string): Promise<string | null> {
++    const cwd = record.persistence?.metadata?.cwd ?? record.cwd;
++    if (typeof cwd !== "string") return null;
++    for (const configDir of this.envDirs("CLAUDE_CONFIG_DIR", claudeConfigDir(process.env))) {
++      const candidate = await claudeTranscriptPath({ cwd, sessionId, configDir });
++      if (await exists(candidate)) return candidate;
++    }
++    return null;
++  }
++
++  private async locateCodex(threadId: string): Promise<string | null> {
++    if (!this.rollouts) {
++      this.rollouts = new Map();
++      const defaultHome = process.env.CODEX_HOME ?? path.join(homedir(), ".codex");
++      for (const home of this.envDirs("CODEX_HOME", defaultHome)) {
++        await collectRollouts(path.join(home, "sessions"), this.rollouts);
++        await collectRollouts(path.join(home, "archived_sessions"), this.rollouts);
++      }
++    }
++    return this.rollouts.get(threadId.toLowerCase()) ?? null;
++  }
++
++  private envDirs(name: string, fallback: string): string[] {
++    const dirs = new Set([path.resolve(fallback)]);
++    for (const env of this.deps.listProviderEnvironments()) {
++      const value = env[name];
++      if (value) dirs.add(path.resolve(value));
++    }
++    return [...dirs];
++  }
++
++  private async load(): Promise<void> {
++    if (this.loaded) return;
++    this.loaded = true;
++    try {
++      const parsed = CacheFileSchema.safeParse(
++        JSON.parse(await readFile(this.deps.cacheFile, "utf8")),
++      );
++      if (parsed.success) this.transcripts = new Map(Object.entries(parsed.data.transcripts));
++    } catch {
++      // No index yet, or an unreadable one: rebuild from the transcripts.
++    }
++  }
++
++  private async save(): Promise<void> {
++    try {
++      await writeJsonFileAtomic(this.deps.cacheFile, {
++        version: CACHE_VERSION,
++        transcripts: Object.fromEntries(this.transcripts),
++      });
++    } catch (error) {
++      this.deps.logger.warn({ err: error }, "Failed to save the prompt search index");
++    }
++  }
++}
+diff --git a/packages/server/src/server/agent/provider-snapshot-manager.ts b/packages/server/src/server/agent/provider-snapshot-manager.ts
+index 7e728713b..263e0bef4 100644
+--- a/packages/server/src/server/agent/provider-snapshot-manager.ts
++++ b/packages/server/src/server/agent/provider-snapshot-manager.ts
+@@ -356,6 +356,14 @@ export class ProviderSnapshotManager {
+     return this.generation.definitions[provider]?.label ?? provider;
+   }
+ 
++  /** The environment each configured provider launches with, e.g. its CLAUDE_CONFIG_DIR or CODEX_HOME. */
++  listProviderEnvironments(): Array<Record<string, string>> {
++    return Object.values(this.generation.definitions).flatMap((definition) => {
++      const env = definition.configuration?.runtimeSettings?.env;
++      return env ? [env] : [];
++    });
++  }
++
+   getAgentManagerProviderState(): AgentManagerProviderState {
+     return this.createAgentManagerState(this.generation.definitions, this.providerClients);
+   }
+diff --git a/packages/server/src/server/authorization/operation-permissions.ts b/packages/server/src/server/authorization/operation-permissions.ts
+index 2015316b0..c2292b549 100644
+--- a/packages/server/src/server/authorization/operation-permissions.ts
++++ b/packages/server/src/server/authorization/operation-permissions.ts
+@@ -99,6 +99,7 @@ const INBOUND_PERMISSION = {
+   file_download_token_request: "workspace.read",
+   file_explorer_request: "workspace.read",
+   "forge.search.request": "workspace.read",
++  "agent.prompts.search.request": "workspace.read",
+   "fs.entry.create.request": "workspace.write",
+   "fs.entry.delete.request": "workspace.write",
+   "fs.entry.duplicate.request": "workspace.write",
+@@ -348,6 +349,7 @@ const OUTBOUND_PERMISSION = {
+   file_download_token_response: "workspace.read",
+   file_explorer_response: "workspace.read",
+   "forge.search.response": "workspace.read",
++  "agent.prompts.search.response": "workspace.read",
+   "fs.entry.create.response": "workspace.write",
+   "fs.entry.delete.response": "workspace.write",
+   "fs.entry.duplicate.response": "workspace.write",
+diff --git a/packages/server/src/server/prompt-search.e2e.test.ts b/packages/server/src/server/prompt-search.e2e.test.ts
+new file mode 100644
+index 000000000..04322fdea
+--- /dev/null
++++ b/packages/server/src/server/prompt-search.e2e.test.ts
+@@ -0,0 +1,92 @@
++import { randomUUID } from "node:crypto";
++import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
++import os from "node:os";
++import path from "node:path";
++import pino from "pino";
++import { afterEach, expect, test } from "vitest";
++import { AgentStorage, type StoredAgentRecord } from "./agent/agent-storage.js";
++import { claudeProjectDirSync } from "./agent/providers/claude/project-dir.js";
++import { DaemonClient } from "./test-utils/daemon-client.js";
++import { createTestPaseoDaemon, type TestPaseoDaemon } from "./test-utils/paseo-daemon.js";
++
++let daemon: TestPaseoDaemon | null = null;
++let client: DaemonClient | null = null;
++let root: string | null = null;
++
++afterEach(async () => {
++  await client?.close().catch(() => {});
++  await daemon?.close();
++  if (root) await rm(root, { recursive: true, force: true });
++  client = null;
++  daemon = null;
++  root = null;
++});
++
++test("searches the prompts you sent in a stored chat, not its replies", async () => {
++  root = await realpath(await mkdtemp(path.join(os.tmpdir(), "prompt-search-e2e-")));
++  const repo = path.join(root, "repo");
++  const claudeDir = path.join(root, "claude");
++  const paseoHomeRoot = path.join(root, "home");
++  const sessionId = randomUUID();
++  await mkdir(repo, { recursive: true });
++
++  const projectDir = claudeProjectDirSync(repo, { configDir: claudeDir });
++  await mkdir(projectDir, { recursive: true });
++  await writeFile(
++    path.join(projectDir, `${sessionId}.jsonl`),
++    [
++      {
++        type: "user",
++        timestamp: "2026-11-24T01:00:00.000Z",
++        message: { role: "user", content: "侧栏时间不对" },
++      },
++      {
++        type: "assistant",
++        timestamp: "2026-11-24T01:00:05.000Z",
++        message: { role: "assistant", content: [{ type: "text", text: "侧栏时间已修好" }] },
++      },
++    ]
++      .map((line) => JSON.stringify(line))
++      .join("\n") + "\n",
++  );
++
++  // Stored before the daemon starts, as a chat from an earlier run would be.
++  const storage = new AgentStorage(
++    path.join(paseoHomeRoot, ".paseo", "agents"),
++    pino({ level: "silent" }),
++  );
++  const now = "2026-11-24T01:00:00.000Z";
++  await storage.upsert({
++    id: "agent-1",
++    provider: "claude",
++    cwd: repo,
++    createdAt: now,
++    updatedAt: now,
++    title: "侧栏",
++    labels: {},
++    config: {},
++    persistence: { provider: "claude", sessionId },
++  } as unknown as StoredAgentRecord);
++  await storage.flush();
++
++  daemon = await createTestPaseoDaemon({
++    paseoHomeRoot,
++    providerOverrides: { claude: { env: { CLAUDE_CONFIG_DIR: claudeDir } } },
++  });
++  client = new DaemonClient({
++    url: `ws://127.0.0.1:${daemon.port}/ws`,
++    clientId: `cid-e2e-${randomUUID()}`,
++    clientType: "cli",
++  });
++  await client.connect();
++  expect(client.getLastServerInfoMessage()?.features?.promptSearch).toBe(true);
++
++  const found = await client.searchAgentPrompts({ query: "侧栏 时间" });
++  expect(found.error).toBeNull();
++  expect(found.matches.map((match) => [match.agentId, match.agentTitle, match.text])).toEqual([
++    ["agent-1", "侧栏", "侧栏时间不对"],
++  ]);
++
++  const reply = await client.searchAgentPrompts({ query: "已修好" });
++  expect(reply.matches).toEqual([]);
++}, 60_000);
+diff --git a/packages/server/src/server/session.ts b/packages/server/src/server/session.ts
+index 273c08c07..694158d27 100644
+--- a/packages/server/src/server/session.ts
++++ b/packages/server/src/server/session.ts
+@@ -8,7 +8,10 @@ import {
+   createWorkspaceBaseBranchService,
+   type WorkspaceBaseBranchService,
+ } from "./session/workspace-base-branch/service.js";
+-import type { WorkspaceBaseBranchSetRequest } from "@getpaseo/protocol/messages";
++import type {
++  AgentPromptSearchMatch,
++  WorkspaceBaseBranchSetRequest,
++} from "@getpaseo/protocol/messages";
+ 
+ import { searchTimeline } from "./agent/chat-search/index.js";
+ import type { BrowserToolsBroker } from "./browser-tools/broker.js";
+@@ -161,6 +164,7 @@ import {
+ } from "./agent/agent-sdk-types.js";
+ import type { StoredAgentRecord } from "./agent/agent-storage.js";
+ import type { AgentStorage } from "./agent/agent-storage.js";
++import type { PromptSearchIndex } from "./agent/prompt-search.js";
+ import {
+   ImportSessionsRequestError,
+   importProviderSession,
+@@ -502,6 +506,8 @@ export interface SessionOptions {
+   worktreesRoot?: string;
+   agentManager: AgentManager;
+   agentStorage: AgentStorage;
++  /** Absent in tests that build a Session without the daemon; searching then reports an error. */
++  promptSearch?: PromptSearchIndex;
+   messageReceipts: Pick<MessageReceipts, "send">;
+   agentMessages: AgentMessageDelivery;
+   creationService: Pick<CreationService, "create" | "subscribe">;
+@@ -797,6 +803,7 @@ export class Session {
+ 
+   private agentManager: AgentManager;
+   private readonly agentStorage: AgentStorage;
++  private readonly promptSearch: PromptSearchIndex | undefined;
+   private readonly projectRegistry: ProjectRegistry;
+   private readonly workspaceRegistry: WorkspaceRegistry;
+   private readonly agentDirectory: AgentDirectory;
+@@ -903,6 +910,7 @@ export class Session {
+       worktreesRoot,
+       agentManager,
+       agentStorage,
++      promptSearch,
+       projectRegistry,
+       workspaceRegistry,
+       directorySync,
+@@ -988,6 +996,7 @@ export class Session {
+     });
+     this.agentManager = agentManager;
+     this.agentStorage = agentStorage;
++    this.promptSearch = promptSearch;
+     this.projectRegistry = projectRegistry;
+     this.workspaceRegistry = workspaceRegistry;
+     this.directorySync = resolveDirectorySync(directorySync);
+@@ -3342,6 +3351,8 @@ export class Session {
+         return this.checkoutSession.handleCheckoutPrStatusRequest(msg);
+       case "pull_request_timeline_request":
+         return this.checkoutSession.handlePullRequestTimelineRequest(msg);
++      case "agent.prompts.search.request":
++        return this.handleAgentPromptsSearch(msg);
+       case "forge.search.request":
+       case "github_search_request":
+         return this.checkoutSession.handleForgeSearchRequest(msg);
+@@ -6857,6 +6868,35 @@ export class Session {
+     }
+   }
+ 
++  private async handleAgentPromptsSearch(
++    request: Extract<SessionInboundMessage, { type: "agent.prompts.search.request" }>,
++  ): Promise<void> {
++    const respond = (payload: {
++      matches: AgentPromptSearchMatch[];
++      truncated: boolean;
++      error: string | null;
++    }) =>
++      this.emit({
++        type: "agent.prompts.search.response",
++        payload: { ...payload, requestId: request.requestId },
++      });
++    if (!this.promptSearch) {
++      respond({ matches: [], truncated: false, error: "Prompt search is not available" });
++      return;
++    }
++    try {
++      const result = await this.promptSearch.search(request.query, request.limit);
++      respond({ ...result, error: null });
++    } catch (error) {
++      this.sessionLogger.error({ err: error }, "Failed to handle agent.prompts.search.request");
++      respond({
++        matches: [],
++        truncated: false,
++        error: error instanceof Error ? error.message : "Failed to search prompts",
++      });
++    }
++  }
++
+   private async handleFetchRecentProviderSessions(
+     request: Extract<SessionInboundMessage, { type: "fetch_recent_provider_sessions_request" }>,
+   ): Promise<void> {
+diff --git a/packages/server/src/server/websocket-server.ts b/packages/server/src/server/websocket-server.ts
+index 5e302ad08..9a0068ce2 100644
+--- a/packages/server/src/server/websocket-server.ts
++++ b/packages/server/src/server/websocket-server.ts
+@@ -73,6 +73,7 @@ import { WorkspaceArchiveOperations } from "./workspace-archive-operations.js";
+ import type { HubExecutionAgents } from "./hub/daemon-executions.js";
+ import type { AgentProvider } from "./agent/agent-sdk-types.js";
+ import { ProviderSnapshotManager } from "./agent/provider-snapshot-manager.js";
++import { PromptSearchIndex } from "./agent/prompt-search.js";
+ import { attachMutableProviderConfigOwner } from "./agent/mutable-provider-config-owner.js";
+ import type {
+   WorkspaceGitRuntimeSnapshot,
+@@ -621,6 +622,8 @@ export class VoiceAssistantWebSocketServer {
+   // archive another connection started.
+   private readonly workspaceArchiveOperations = new WorkspaceArchiveOperations();
+   private readonly providerSnapshotManager: ProviderSnapshotManager;
++  // One index for every connection: it reads transcripts and holds their prompts.
++  private readonly promptSearch: PromptSearchIndex;
+   private onLifecycleIntent!: ((intent: SessionLifecycleIntent) => void) | null;
+   private onBranchChanged!:
+     | ((workspaceId: string, oldBranch: string | null, newBranch: string | null) => void)
+@@ -803,6 +806,12 @@ export class VoiceAssistantWebSocketServer {
+       throw new Error("providerSnapshotManager is required");
+     }
+     this.providerSnapshotManager = providerSnapshotManager;
++    this.promptSearch = new PromptSearchIndex({
++      listAgentRecords: () => agentStorage.listAll(),
++      listProviderEnvironments: () => providerSnapshotManager.listProviderEnvironments(),
++      cacheFile: join(paseoHome, "prompt-search-index.json"),
++      logger: this.logger.child({ module: "prompt-search" }),
++    });
+     this.serverCapabilities = buildServerCapabilities({
+       readiness: this.speech?.getReadiness() ?? null,
+     });
+@@ -1680,6 +1689,7 @@ export class VoiceAssistantWebSocketServer {
+       worktreesRoot: this.worktreesRoot,
+       agentManager: this.agentManager,
+       agentStorage: this.agentStorage,
++      promptSearch: this.promptSearch,
+       messageReceipts: this.messageReceipts,
+       agentMessages: this.agentMessages,
+       creationService: this.creationService,
+@@ -2079,6 +2089,7 @@ export class VoiceAssistantWebSocketServer {
+         // and legacy fallback after 2027-01-17 once the supported daemon floor
+         // is >= v0.2.0.
+         forgeSearch: true,
++        promptSearch: true,
+         // COMPAT(daemonStatusRpc): added in v0.1.76, remove gate after 2026-11-18.
+         ...(this.advertiseDaemonStatusRpc ? { daemonStatusRpc: true } : {}),
+         // COMPAT(daemonConfigReload): added in v0.4.0, remove gate after 2027-02-14.
+-- 
+2.54.0 (Apple Git-157)
+

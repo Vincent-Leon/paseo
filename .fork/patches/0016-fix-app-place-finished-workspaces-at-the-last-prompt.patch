@@ -1,0 +1,193 @@
+From d458e8d96edf3b4b662c8fcf46fcbc52e2c14ba1 Mon Sep 17 00:00:00 2001
+From: Vincent Leon <leon@mbp.com>
+Date: Tue, 24 Nov 2026 12:06:42 +0800
+Subject: [PATCH 16/17] fix(app): place finished workspaces at the last prompt
+ sent there
+
+The sidebar showed, sorted and grouped finished workspaces by when they entered the done
+bucket. Every time an app connects, the daemon reopens closed chats to read their history,
+and that reopening restamps the time, so workspaces untouched for days showed as just used.
+On one host, 75 of 170 chats sat hours or weeks after their last prompt.
+
+A finished workspace now uses the last prompt sent there, which only moves when you send one,
+and falls back to the done entry time when it never got a prompt. Running and attention rows
+keep their bucket entry time. Command Center ranks workspaces by the same time.
+---
+ .../src/components/sidebar/activity-groups.ts |  8 ++--
+ .../sidebar-workspaces-view-model.test.ts     | 42 +++++++++++++++++++
+ .../hooks/sidebar-workspaces-view-model.ts    | 10 ++++-
+ packages/app/src/utils/projects.ts            |  8 +++-
+ packages/app/src/workspace-status/index.ts    | 16 +++++++
+ 5 files changed, 77 insertions(+), 7 deletions(-)
+
+diff --git a/packages/app/src/components/sidebar/activity-groups.ts b/packages/app/src/components/sidebar/activity-groups.ts
+index 06a1aa297..38a90290b 100644
+--- a/packages/app/src/components/sidebar/activity-groups.ts
++++ b/packages/app/src/components/sidebar/activity-groups.ts
+@@ -43,8 +43,8 @@ export function activityWindowStart(window: SidebarActivityWindow, now: number):
+  * the window under one Done group, and everything finished before it folded into one group per
+  * project, the project with the most recent finish first.
+  *
+- * A done workspace's `statusEnteredAt` is when it entered the done bucket, which is when it
+- * finished. A done workspace without one has no known finish, so it counts as older.
++ * A done row's `statusEnteredAt` is the last prompt sent there (see workspaceListTime), so the
++ * window holds what you used recently. A done row without one counts as older.
+  */
+ export function buildActivityGroups(input: ActivityGroupsInput): SidebarWorkspaceGroup[] {
+   const { workspaces, projectNamesByViewKey, t } = input;
+@@ -58,8 +58,8 @@ export function buildActivityGroups(input: ActivityGroupsInput): SidebarWorkspac
+       live.push(workspace);
+       continue;
+     }
+-    const finishedAt = workspace.statusEnteredAt?.getTime() ?? null;
+-    if (finishedAt !== null && finishedAt >= windowStart) {
++    const usedAt = workspace.statusEnteredAt?.getTime() ?? null;
++    if (usedAt !== null && usedAt >= windowStart) {
+       recent.push(workspace);
+       continue;
+     }
+diff --git a/packages/app/src/hooks/sidebar-workspaces-view-model.test.ts b/packages/app/src/hooks/sidebar-workspaces-view-model.test.ts
+index 7aa85c1fa..20e4690fd 100644
+--- a/packages/app/src/hooks/sidebar-workspaces-view-model.test.ts
++++ b/packages/app/src/hooks/sidebar-workspaces-view-model.test.ts
+@@ -71,6 +71,48 @@ describe("createSidebarWorkspaceEntry forge threading", () => {
+   });
+ });
+ 
++describe("createSidebarWorkspaceEntry sidebar time", () => {
++  const finishedAt = new Date("2026-11-24T09:25:47.000Z");
++  const promptedAt = new Date("2026-11-20T10:53:00.000Z");
++
++  function entryFor(overrides: Partial<WorkspaceDescriptor>) {
++    return createSidebarWorkspaceEntry({
++      serverId: "srv",
++      workspace: { ...workspaceWithForge("github", "https://github.com/o/r/pull/1"), ...overrides },
++    });
++  }
++
++  it("shows a finished workspace at the last prompt sent there", () => {
++    const entry = entryFor({
++      status: "done",
++      statusEnteredAt: finishedAt,
++      lastUserMessageAt: promptedAt,
++    });
++
++    expect(entry.statusEnteredAt).toEqual(promptedAt);
++  });
++
++  it("keeps the done entry time for a finished workspace that never got a prompt", () => {
++    const entry = entryFor({
++      status: "done",
++      statusEnteredAt: finishedAt,
++      lastUserMessageAt: null,
++    });
++
++    expect(entry.statusEnteredAt).toEqual(finishedAt);
++  });
++
++  it("keeps the bucket entry time for a live workspace", () => {
++    const entry = entryFor({
++      status: "running",
++      statusEnteredAt: finishedAt,
++      lastUserMessageAt: promptedAt,
++    });
++
++    expect(entry.statusEnteredAt).toEqual(finishedAt);
++  });
++});
++
+ describe("createSidebarWorkspaceEntry workspace directory label", () => {
+   it("uses the daemon-provided slug for a Paseo-owned worktree", () => {
+     const descriptor = workspaceWithForge(undefined, "https://github.com/acme/repo/pull/42");
+diff --git a/packages/app/src/hooks/sidebar-workspaces-view-model.ts b/packages/app/src/hooks/sidebar-workspaces-view-model.ts
+index da1086da4..2ad6035b3 100644
+--- a/packages/app/src/hooks/sidebar-workspaces-view-model.ts
++++ b/packages/app/src/hooks/sidebar-workspaces-view-model.ts
+@@ -1,4 +1,4 @@
+-import { deriveEffectiveWorkspaceStatus } from "@/workspace-status";
++import { deriveEffectiveWorkspaceStatus, workspaceListTime } from "@/workspace-status";
+ import equal from "fast-deep-equal";
+ import type { PrHint } from "@/git/pr-hint";
+ import { selectPrHintFromStatus } from "@/git/pr-hint";
+@@ -35,6 +35,8 @@ export interface SidebarWorkspacePlacement {
+ 
+ export interface SidebarStatusWorkspacePlacement extends SidebarWorkspacePlacement {
+   statusBucket: SidebarStateBucket;
++  // When the row entered its bucket, except a finished row, which carries the last prompt sent
++  // there (see workspaceListTime). The sidebar shows, sorts and groups by this time.
+   statusEnteredAt: Date | null;
+ }
+ 
+@@ -169,7 +171,11 @@ export function createSidebarWorkspaceEntry(input: {
+     labels: input.workspace.labels ?? EMPTY_WORKSPACE_LABELS,
+     currentBranch: normalizeCurrentBranch(input.workspace.gitRuntime?.currentBranch),
+     statusBucket: effectiveStatus.status,
+-    statusEnteredAt: effectiveStatus.enteredAt,
++    statusEnteredAt: workspaceListTime({
++      status: effectiveStatus.status,
++      enteredAt: effectiveStatus.enteredAt,
++      lastUserMessageAt: input.workspace.lastUserMessageAt,
++    }),
+     archivingAt: input.workspace.archivingAt,
+     diffStat: input.workspace.diffStat,
+     prHint: selectPrHintFromStatus(
+diff --git a/packages/app/src/utils/projects.ts b/packages/app/src/utils/projects.ts
+index 3136476b7..9e4ca70ad 100644
+--- a/packages/app/src/utils/projects.ts
++++ b/packages/app/src/utils/projects.ts
+@@ -2,6 +2,7 @@ import type { ProjectDescriptor, WorkspaceDescriptor } from "@/stores/session-st
+ import type { HostProjectListItem } from "@/projects/host-project-model";
+ import { buildWorkspaceStructureProjects } from "@/projects/workspace-structure";
+ import { selectPrHintFromStatus } from "@/git/pr-hint";
++import { workspaceListTime } from "@/workspace-status";
+ 
+ export interface WorkspaceSummary {
+   id: string;
+@@ -15,6 +16,7 @@ export interface WorkspaceSummary {
+   archivingAt?: string;
+   /** Pull/merge request number backing this workspace, so a query can find it. */
+   changeRequestNumber: number | null;
++  /** Recency for ranking: a finished workspace's last prompt, otherwise its bucket entry time (see workspaceListTime). */
+   statusEnteredAt: Date | null;
+ }
+ 
+@@ -165,7 +167,11 @@ function toWorkspaceSummary(workspace: WorkspaceDescriptor): WorkspaceSummary {
+     currentBranch: currentBranch && currentBranch !== "HEAD" ? currentBranch : null,
+     ...(workspace.archivingAt ? { archivingAt: workspace.archivingAt } : {}),
+     changeRequestNumber: toChangeRequestNumber(workspace),
+-    statusEnteredAt: workspace.statusEnteredAt,
++    statusEnteredAt: workspaceListTime({
++      status: workspace.status,
++      enteredAt: workspace.statusEnteredAt,
++      lastUserMessageAt: workspace.lastUserMessageAt,
++    }),
+   };
+ }
+ 
+diff --git a/packages/app/src/workspace-status/index.ts b/packages/app/src/workspace-status/index.ts
+index 45bf68ab8..efdec86d9 100644
+--- a/packages/app/src/workspace-status/index.ts
++++ b/packages/app/src/workspace-status/index.ts
+@@ -72,3 +72,19 @@ export function useWorkspaceStatus(serverId: string, workspaceId: string) {
+     }),
+   );
+ }
++
++/**
++ * A finished workspace is placed at the last prompt sent there, not at when it entered `done`.
++ * The daemon reopens closed chats to read their history whenever an app connects, and that
++ * reopening restamps the done entry time, so a workspace untouched for days showed as just used.
++ * The last prompt only moves when you send one. Live buckets keep their entry time: "running for
++ * 5 min" is what they mean.
++ */
++export function workspaceListTime(input: {
++  status: WorkspaceDescriptor["status"];
++  enteredAt: Date | null;
++  lastUserMessageAt: Date | null;
++}): Date | null {
++  if (input.status !== "done") return input.enteredAt;
++  return input.lastUserMessageAt ?? input.enteredAt;
++}
+-- 
+2.54.0 (Apple Git-157)
+
