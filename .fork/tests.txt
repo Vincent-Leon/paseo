@@ -24,3 +24,8 @@ packages/server src/server/push/index.test.ts
 packages/client src/daemon-client.test.ts
 packages/protocol src/provider-config.test.ts
 packages/server src/server/agent/provider-registry.test.ts
+packages/app src/hooks/sidebar-workspaces-view-model.test.ts
+packages/app src/command-center/sections.test.ts
+packages/app src/command-center/prompt-search.test.ts
+packages/server src/server/agent/prompt-search.test.ts
+packages/server src/server/prompt-search.e2e.test.ts
